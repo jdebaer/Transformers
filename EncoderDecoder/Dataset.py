@@ -61,7 +61,7 @@ class BilingualDataset(Dataset)
             ]
         )
 
-        decodder_label_tensor = torch.cat(
+        decoder_label_tensor = torch.cat(
             [
             toch.tensor(decoder_input_ids, dtype=torch.int64),
             self.eos_token,
@@ -73,9 +73,23 @@ class BilingualDataset(Dataset)
         assert decoder_input_tensor.size(0) == self.seq_len
         assert decoder_label_tensor.size(0) == self.seq_len
 
-1:44:28
+# Return as dictionary
+
+        return {
+            "encoder_input_tensor": encoder_input_tensor, # dimension is seq_len
+            "decoder_input_tensor": decoder_input_tensor, # dimension is seq_len
+            "encoder_input_tensor_padding_mask": (encoder_input_tensor != self.pad_token).unsqueeze(0).unsqueeze(0).int() # dimension is (1,1,seq_len)  
+            "decoder_input_tensor_causal_mask": (decoder_input_tensor != self.pad_token).unsqueeze(0).unsqueeze(0).int() & causal_mask(decoder_input_tensor.size(0)), # dimensions are (1,1,seq_len) and (1,seq_len,seq_len) respectively
+            "decoder_label_tensor": decoder_label_tensor, # dimension is seq_len
+            "src_txt": src_txt,
+            "tgt_txt": tgt_txt
+        }
 
 
+    def causal_mask(dim):
+  
+        mask = torch.triu(torch.ones(1, dim, dim), diagonal=1).type(torch.int) # This one has zero diag and zeroes below, we need opposite hence:
+        return mask == 0
 
 
 
