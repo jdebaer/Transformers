@@ -86,25 +86,9 @@ class BilingualDataset(Dataset)
         }
 
 
-    def causal_mask(dim):
+def causal_mask(dim):
   
-        mask = torch.triu(torch.ones(1, dim, dim), diagonal=1).type(torch.int) # This one has zero diag and zeroes below, we need opposite hence:
-        return mask == 0
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    mask = torch.triu(torch.ones(1, dim, dim), diagonal=1).type(torch.int) # This one has zero diag and zeroes below, we need opposite hence:
+    return mask == 0
 
  

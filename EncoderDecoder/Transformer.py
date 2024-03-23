@@ -68,7 +68,7 @@ class Transformer(nn.Module):
         self.decoder = Decoder(config, decoder_vocab_size, decoder_seq_len)
         self.projection_layer = ProjectionLayer(config, decoder_vocab_size)
 
-    def encode(self, encoder_input_ids, encoder_mask):
+    def encode(self, encoder_input_ids, encoder_mask): # this can be batched or not, note down dimensions to do
         
         return self.encoder(encoder_input_ids, encoder_mask)
 
