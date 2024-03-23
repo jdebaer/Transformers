@@ -19,6 +19,67 @@ from torch.utils.tensorboard import SummaryWriter
 
 from pathlib import Path
 
+
+def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_padding_mask_batch, src_tokenizer, tgt_tokenizer, max_len, device): # Fix these to be more representative 
+
+    sos_id = src_tokenizer.token_to_id('[SOS]') # Either tokenizer can be used for this
+    eos_id = src_tokenizer.token_to_id('[EOS]') # Either tokenizer can be used for this
+
+    # Now get the encoder output and we're going to use it for every token we predict with the decoder, for the cross attention
+    encoder_output_tensor_batch = model.encode(encoder_input_tensor_batch, encoder_input_tensor_padding_mask_batch) # dim (batch_size, seq_len, embed_size)
+
+    # Now get the decoder started with just the [SOS] token
+    decoder_input_tensor_batch = torch.empty(1,1).fill_(sos_id).type_as(encoder_input_tensor_batch).to(device) # dim (b_s, seq_len) but 1 and still 1 here since 1 token
+    
+    # Now we're going keep predicting the next token until we get [EOS] or until we reach max_len
+    while True:
+        if decoder_input_tensor_batch.size(1) == max_len: # dim 0 is the batch
+            break
+     
+        # At each inference we need to provide an inference-specific causal mask, which shorten on each iteration
+        decoder_input_tensor_causal_mask_batch = causal_mask(decoder_input_tensor_batch.size(1)).type_as(encoder_input_tensor_padding_mask_batch).to(device)
+        
+        # Do inference using the decoder, providing it the cross attention
+        decoder_output_tensor_batch = model.decode(decoder_input_tensor_batch, decoder_input_tensor_causal_mask_batch, encoder_output_tensor_batch, encoder_input_tensor_padding_mask_batch)
+
+        # Get the next token
+       2:29:49 
+        
+        
+
+
+
+#def run_validation(model, val_dataset, src_tokenizer, tgt_tokenizer, max_len, device, print_msg, global_state, writer, num_examples=2)
+    # Note: val_dataset is not correct here, this has to be a batch_iterator wrapped around a data_loader or at least a data_loader which can provide batches
+
+def run_validation(model, val_dataloader, src_tokenizer, tgt_tokenizer, max_len, device, print_msg, global_state, writer, num_examples=2)
+
+    model.eval()
+    count = 0
+    source_texts = []
+    expected = []
+    predicted = []
+      
+    console_width = 80 # Size of the control window
+
+    with torch.no_grad(): # Disable gradient calculation to make it faster
+
+        for batch in val_dataloader: # Remember that for the validation dataloader we have set a batch size of 1
+            count += 1
+            
+            encoder_input_tensor_batch = batch['encoder_input_tensor'].to(device) # dimension is (batch_size,seq_len)
+            encoder_input_tensor_padding_mask_batch = batch['encoder_input_tensor_padding_mask'].to(device) # dimension is (batch_size,1,1,seq_len)
+
+            assert encoder_input_tensor_batch.size(0) == 1, "Batch size for validation must be 1"
+
+            decoder_input_tensor_batch = batch['decoder_input_tensor'].to(device) # dimension is (batch_size_seq_len)
+            decoder_input_tensor_causal_mask_batch = batch['decoder_input_tensor_causal_mask'].to(device) # dimension is (batch_size,1,seq_len,seq_len)
+        
+    
+    
+
+
+
 def get_all_sentences(dataset, language):
     
     for item in dataset:
@@ -199,6 +260,5 @@ if __name__ == '__main__':
     warnings.filterwarnings('ignore')
     config = get_config()
     train_model(config)
-
 
 
