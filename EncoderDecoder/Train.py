@@ -40,10 +40,26 @@ def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_paddin
         decoder_input_tensor_causal_mask_batch = causal_mask(decoder_input_tensor_batch.size(1)).type_as(encoder_input_tensor_padding_mask_batch).to(device)
         
         # Do inference using the decoder, providing it the cross attention
-        decoder_output_tensor_batch = model.decode(decoder_input_tensor_batch, decoder_input_tensor_causal_mask_batch, encoder_output_tensor_batch, encoder_input_tensor_padding_mask_batch)
+        decoder_output_tensor_batch = model.decode(decoder_input_tensor_batch, decoder_input_tensor_causal_mask_batch, encoder_output_tensor_batch, encoder_input_tensor_padding_mask_batch) 
 
         # Get the next token
-       2:29:49 
+        # transformer_output_tensor_batch is a set of probabilities that have been softmaxed
+        # we only need these for the last element in the seq_len dimension (as we are not training), hence the [:,-1]
+        probabilities = model.project(decoder_output_tensor_batch[:,-1]) # dim is (batch_size, seq_len, tgt_vocab_size)
+
+        # Via the probabilities we select the next token (id?) by choosing the one with the hights prob
+        _, next_id = torch.max(probabilities, dim=1) # To do: find out where the id comes from
+
+        # Now we need to append the next word (id?) to decoder_input_tensor_batch that we created above (in the seq dimension)
+        # item() converts tensor with one element to a standard number (not a tensor)
+        # on first run we go from (1,1) to (1,2) and we keep growing in that dimension -> we always only need to project with last one (is new word added in previous run)
+        decoder_input_tensor_batch = torch.cat([decoder_input_tensor_batch, torch.empty(1,1).fill_(next_id.item()).type_as(encoder_input_tensor_batch).to(device)], dim=1) # dim is the dimension in which we do the concat
+    
+        if next_id == eos_id:
+            break
+
+    return decoder_input_tensor_batch.squeeze(0) # squeeze removes the batch dimension so we end up with a seq tensor containing ids
+        
         
         
 
@@ -72,8 +88,27 @@ def run_validation(model, val_dataloader, src_tokenizer, tgt_tokenizer, max_len,
 
             assert encoder_input_tensor_batch.size(0) == 1, "Batch size for validation must be 1"
 
-            decoder_input_tensor_batch = batch['decoder_input_tensor'].to(device) # dimension is (batch_size_seq_len)
-            decoder_input_tensor_causal_mask_batch = batch['decoder_input_tensor_causal_mask'].to(device) # dimension is (batch_size,1,seq_len,seq_len)
+            transformer_id_output = greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_padding_mask_batch, src_tokenizer, tgt_tokenizer, max_len, device)
+            source_text = batch['src_text'][0]
+            target_text = batch['tgt_text'][0]
+            transformer_text_output = tgt_tokenizer.decoder(transformer_id_output.detach().cpu().numpy())
+
+            # Lists are for tensorboard
+            #source_texts.append(source_text)
+            #expected.append(target_text)
+            #predicted.append(transformer_text_output)
+
+            # don't use regular print function as it will mess up tqdm
+            print_msg('-' * console_width)
+            print_msg(f'SOURCE: {source_text}')
+            print_msg(f'TARGET: {target_text}')
+            print_msg(f'PREDICTED: {transformer_text_output}')
+
+            if count == num_examples:
+                break
+
+#    if writer: # This is tensorboard
+#        # To do: TorchMetrics add this CharErrorRate, BLEU, WordErrorRate
         
     
     
@@ -194,10 +229,12 @@ def train_model(config):
 
     for epoch in range(initial_epoch, config['num_epochs']:
 
-        model.train()
+        # model.train() normally we run validation after each epoch, not after each batch
         batch_iterator = tqdm(train_dataloader, desc=f'Processing epoch {epoch:02d}') # tqdm is what draws the nice progress bars, wrap it around DataLoader
 
         for batch in batch_iterator:
+ 
+            model.train() # Because we run validation after every BATCH (and not epoch) we need to put the model back in train() mode at the start of each batch
 
             # Below is how we push the data to the GPU as well (the model is already there)
             # If this stuff doesn't fit on the GPU mem then you get a runtime CUDA out of mem error
@@ -215,7 +252,7 @@ def train_model(config):
             # The below matches 'decode(self, decoder_input_ids, decoder_mask, encoder_output, encoder_mask):' in transformer.py
             # Dim of the below is also (batch_size, seq_len, embed_size)
             decoder_output_tensor_batch = model.decode(decoder_input_tensor_batch, decoder_input_tensor_causal_mask_batch, encoder_output_tensor_batch, encoder_input_tensor_padding_mask_batch )
-            transformer_output_tensor_batch = model.projectdecoder_output_tensor_batch) # dim is (batch_size, seq_len, tgt_vocab_size)
+            transformer_output_tensor_batch = model.project(decoder_output_tensor_batch) # dim is (batch_size, seq_len, tgt_vocab_size)
                    
             # Now let's compare these batched predictions with our batched labels
             # The label (below) is essentially the same sequence but the ids are shifted with one position (same amount of padding tokens) 
@@ -241,7 +278,12 @@ def train_model(config):
             optimizer.step()
             optimizer.zero_grad() # Zero out the gradient
 
+
+            run_validation(model, val_dataloader, src_tokenizer, tgt_tokenizer, config['seq_len', device, lambda msg: batch_iterator.write(msg), global_step, writer)
+
             global_step += 1 # This is only used by TensorBoard to keep track of the loss
+
+        # Normally run_validation runs here put it here once you have debugged
 
         # Save the model after every epoch in case of a crash
         # It's also really needed to save the optimizer as it keeps track of certain statistics, one for each weight, to understand how to optimize each weight independently 
