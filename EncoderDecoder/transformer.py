@@ -26,7 +26,7 @@ class EncoderForSequenceClassification(nn.Module):
 class Embedding(nn.Module):
 
     # An Embedding maps each input id to a vector of size embed_size.
-    # For an Encoder-Decoder we'll need to Embedddings, each with their own vocab size and possible also a different seq_len.
+    # For an Encoder-Decoder we'll need two Embedddings, each with their own vocab size and possible also a different seq_len.
 
     def __init__(self, config, vocab_size, seq_len):
         super().__init__()
@@ -41,18 +41,12 @@ class Embedding(nn.Module):
     def forward(self, input_ids):
 
         assert seq_len == input_ids.size(1), "Sequence length must be the same as the size of dimension 1 in input_ids."
-        
-        position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0) # this creates a [1,seq_len] tensor
-
-        token_embeddings = self.token_embeddings(input_ids) # some implementations add: "* math.sqrt(embed_size)"
+        position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0) 		# Create a [1,seq_len] tensor containing 0,1,2,...
+        token_embeddings = self.token_embeddings(input_ids) 				# Some implementations add: "* math.sqrt(embed_size)".
         position_embeddings = self.position_embeddings(position_ids)
-        
-        embeddings = token_embeddings + position_embeddings
-
+        embeddings = token_embeddings + position_embeddings				
         embeddings = self.layer_norm(embeddings) 
-
         embeddings = self.dropout(embeddings) 
-
         return embeddings
 
 class Transformer(nn.Module):
