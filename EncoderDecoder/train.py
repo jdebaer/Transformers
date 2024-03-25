@@ -302,5 +302,3 @@ if __name__ == '__main__':
     warnings.filterwarnings('ignore')
     config = get_config()
     train_model(config)
-
-

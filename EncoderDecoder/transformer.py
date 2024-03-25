@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 
-# (batch, seq_len, embed_size)
-
 ########## HEAD ##########
 
 class EncoderForSequenceClassification(nn.Module):
@@ -27,24 +25,22 @@ class EncoderForSequenceClassification(nn.Module):
 
 class Embedding(nn.Module):
 
+    # An Embedding maps each input id to a vector of size embed_size.
+    # For an Encoder-Decoder we'll need to Embedddings, each with their own vocab size and possible also a different seq_len.
+
     def __init__(self, config, vocab_size, seq_len):
         super().__init__()
 
         self.seq_len = seq_len
-        self.embed_size = config.embed_size
-
-        self.token_embeddings = nn.Embeddings(vocab_size, config.embed_size)
-#       seq_len - 1 is the highest position starting from position 0
-        self.position_embeddings = nn.Embeddings(self.seq_len, config.embed_size) # We use a learned position encoding, can also do static/not learned
-
-#        self.layer_norm = nn.LayerNorm(config.embed_size, eps=1e-12) switching to default eps since other norm layers do this as well
-        self.layer_norm = nn.LayerNorm(config.embed_size) 
-
-        self.dropout = nn.Dropout(config.dropout_prob)
+        self.embed_size = config['embed_size']
+        self.token_embeddings = nn.Embeddings(vocab_size, config.embed_size) 		# Technically these are id embeddings.
+        self.position_embeddings = nn.Embeddings(self.seq_len, config.embed_size) 	# We use a learned position encoding.
+        self.layer_norm = nn.LayerNorm(config.embed_size) 				# This uses the default eps value.
+        self.dropout = nn.Dropout(config['dropout_prob'])
 
     def forward(self, input_ids):
 
-        assert seq_len == input_ids.size(1), "Sequence length in config must be same as size of dimension 1 (not 0) in input_ids"
+        assert seq_len == input_ids.size(1), "Sequence length must be the same as the size of dimension 1 in input_ids."
         
         position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0) # this creates a [1,seq_len] tensor
 
@@ -55,7 +51,7 @@ class Embedding(nn.Module):
 
         embeddings = self.layer_norm(embeddings) 
 
-        embeddings = self.dropout(embeddings) # This avoids overfitting
+        embeddings = self.dropout(embeddings) 
 
         return embeddings
 
@@ -354,15 +350,3 @@ def build_transformer(encoder_vocab_size, decoder_vocab_size, encoder_seq_len, d
             nn.init.xavier_uniform(p)
 
     return transformer
-
-        
-
-    
-    
-    
-    
-
-
-
-
-
