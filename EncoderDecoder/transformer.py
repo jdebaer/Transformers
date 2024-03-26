@@ -201,18 +201,17 @@ class FeedForward(nn.Module):
     def __init__(self,config):
         super().__init__()
 
-        self.ff1 = nn.Linear(config.embed_size, config.ff_intermediate_size) # bias is True by default
-        self.ff2 = nn.Linear(config.ff_intermediate_size, config.embed_size) # bias is True by default
-        self.gelu = nn.GELU()
-        self.dropout = nn.Dropout(config.dropout_prob)
+        self.ff1 = nn.Linear(config['embed_size'], config['ff_intermediate_size']) # bias is True by default
+        self.ff2 = nn.Linear(config['ff_intermediate_size'], config['embed_size']) # bias is True by default
+        self.gelu = nn.GELU()									# Smoother RELU
+        self.dropout = nn.Dropout(config['dropout_prob'])
 
     def forward(self,x):
         x = self.ff1(x)
         x = self.gelu(x)
         x = self.ff2(x)
-        x = self.dropout(x) # some implementations put the dropout before ff2 (but after gelu/relu)
+        x = self.dropout(x) 									# Can also put the dropout before ff2 (but after gelu/relu)
         return x
-        
 
 class MultiHeadAttention(nn.Module):
     
