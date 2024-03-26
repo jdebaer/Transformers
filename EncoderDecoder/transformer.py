@@ -330,11 +330,18 @@ class AttentionHead(nn.Module):
             # Softmax has e ** x in the numerator, and e ** -inf == 0. Having 0 as the attention score is our objective with the causal mask.
             attention_scores = attention_scores.masked_fill(mask == 0, float("-inf"))
 
-            # Note to understand how the mask is used:
+            # Note to understand how the mask is used with the dot product (skipping the normalization here):
             # When we multiply query with key, we essentially measure the resonance of every word with every word in the sequence.
             # However, for the first word, we don't want to do that for any word that follows (and so on for 2nd, 3rd word ...).
             # 
-
+            # 1,1,1    1,2,3   3, 6, 9    3 here is the resonance of the first word with itself, while 6 is the resonance of word 1 with word 2.
+            # 2,2,2  * 1,2,3 = 6,12,18    However, we want to mask out the 6 since we only want words to resonate with themselves or previous words.
+            # 3,3,3    1,2,3   9,18,27    Hence, we apply the mask, like this:
+            #
+            # 3, 6, 9                1, 0, 0        3, -inf, -inf                            1,   0,  0 -> sums to 1
+            # 6,12,18 -> masked_fill(1, 1, 0) gives 6,   12, -inf which softmax turns into .33, .66,  0 -> sums to 1
+            # 9,18,27                1, 1, 1        9,   18,   27                          .16, .33, .5 -> sums to 1
+            #
 
         attention_weights = attention_scores.softmax(dim = -1)
         if dropout is not None:
