@@ -216,60 +216,42 @@ class FeedForward(nn.Module):
 
 class MultiHeadAttention(nn.Module):
     
-    def __init__(self, config):
+    def __init__(self, config, type='self'):
         super().__init__()
 
-        embed_dim = config.embed_dim
-        num_attention_heads = config.num_attention_heads
+        # In this implementation, the output dimension of an attention head is the embedding size // the number of heads.
+        # The dimensionality reduction is done by the W matrices, with each attention head having its own set of these.
+        # An alternative implementation (e.g., https://www.youtube.com/watch?v=ISNdQcPhsts) is to have W matrices with the size of the embedding
+        # that still output the embedding size, and then you go and split that output up as per the number of heads.
 
-#       If you want to support the case where you divide each embedding by the number of heads then you also need to provide code to
-#       set the attention_head_input_dim accordingly. Here we just set it to embed_dim.
-#       However, attention_head_output_dim is ALWAYS embed_dim // num_attention_heads (although that's also by choice).
-
-#       Alternative approach (Umar Jamil implementation) is that you have one Wq, Wk and Wv per multi-head attention
-#       and the first thing you do is Q x Wq => Q', K * Wk => K' and V * Wv => V' which means that Wq, Wk and Wv are all dimension (embed_size,embed_size)
-#       so square matrices (technically Wv can be (embed_size, something else) then 
-#       AFTER doing this, you then split the ' matrices in #heads parts (say 4) and then you do :
-#       Q'(1) x K'(1) == dotproduct -> /sqrt(remaining size of key/query) -> softmax -> multiply by V'(1) ==> head(1) attention
-#       Then when you have all 4 you reaassemble in matrix which you multiply x with Wo to deliver the mutihead_context_vector
-#       Wo will be (embed_size, embed_size) unless you gave V' another dimension in which case first dim will be the lend of the sum of all
-#       head_attentions (i.e., the concat which needs to be brought back to embed_dim by Wo)
-#       This may be a simpler implementation TBD 
-
+        self.type = type
+        embed_dim = config['embed_dim']
+        num_attention_heads = config['num_attention_heads']
         attention_head_input_dim = embed_dim
         attention_head_output_dim = embed_dim // num_attention_heads
-
         assert embed_dim % num_attention_heads == 0, "Embedding size must be divisible by number of heads" 
-
-        self.heads = nn.ModuleList(
+        self.attention_heads = nn.ModuleList(
             
-            [AttentionHead(attention_head_input_dim, attention_head_output_dim) for _ in range(num_attention_heads)]
+            [AttentionHead(config, attention_head_input_dim, attention_head_output_dim, type) for _ in range(num_attention_heads)]
 
         )
-
-        self.Wo = nn.Linear(embed_dim, embed_dim)
+        # What we feed to Wo are the concatenated head context vectors. This concatenation will have the embedding size again.
+        self.Wo = nn.Linear(embed_dim, embed_dim)						
 
     def forward(self, embedding, mask, encoder_output=None):
     
-#       This is the point where you can decide to turn embedding into embedding_div_by_nr_of_heads and feed every attention head only
-#       a portion of each embedding (each attention head gets the whole sequence, but only a portion of the embedding per token/id
-#       In this case we are passing on the full embedding to attention_head()
-
-        if encoder_output is None:
+        # Note on the mask: this can be a combination of a causal mask and a padding mask (decoder) or a padding mask only (encoder).
+        if self.type == 'self':										# Self attention mode
             concatenated_head_context_vectors = torch.cat(
-               [attention_head(embedding, mask) for attention_head in self.heads], dim=-1 
+               [attention_head(embedding, mask) for attention_head in self.attention_heads], dim=-1 
             )
-        else:
+        else:												# Cross attention mode
             concatenated_head_context_vectors = torch.cat(
-               [attention_head(embedding, mask, encoder_output, encoder_output) for attention_head in self.heads], dim=-1 
+               [attention_head(embedding, mask, encoder_output) for attention_head in self.attention_heads], dim=-1 
             )
-
-        assert concatenated_head_context_vectors.size(-1) == embedding.size(-1), "Concatenated head context vectors size must match embedding size"        
-
+        assert concatenated_head_context_vectors.size(-1) == embedding.size(-1), "Concatenated head context vectors size must match embedding size."        
         multihead_context_vector = self.Wo(concatenated_head_context_vectors)
-
         assert multihead_context_vector.size(-1) == embedding.size(-1), "Output of Wo size must match embedding size"
-
         return multihead_context_vector
 
 class AttentionHead(nn.Module):
@@ -280,27 +262,29 @@ class AttentionHead(nn.Module):
     # This output dim formula is just convention, technically we can output any dimension.
     # The calculation of the attn_head_output_dim is done in the the multi head class since that one knows how many heads we have.
     
-    def __init__(self, attn_head_input_dim, attn_head_output_dim, type='self'):
+    def __init__(self, config, attn_head_input_dim, attn_head_output_dim, type='self'):
         super().__init__()
         
         self.type = type
 
         self.Wq = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
-        if type is not 'self':
+        if self.type is not 'self':
             self.Wk = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
             # Note: technically Wv can have an output_dim that is different from the output_dim of Wq and Wk.
             #       Wq and Wk must have the same ouput_dim since we're doing dot product with the outputs.
             self.Wv = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
         self.dropout = nn.Dropout(config['dropout_prob'])
 
-    def forward(self, embedding, causal_mask, input_for_cross_attention=None): 
+    def forward(self, embedding, mask, input_for_cross_attention=None): 
+
+        # Note on the mask: this can be a combination of a causal mask and a padding mask (decoder) or a padding mask only (encoder).
 
         if self.type == 'self':
             head_context_vector = scaled_dot_product_attention(
                 self.Wq(embedding),
                 self.Wk(embedding),
                 self.Wv(embedding),
-                causal_mask,
+                mask,
                 self.dropout
             )
         else:
@@ -308,13 +292,13 @@ class AttentionHead(nn.Module):
                 self.Wq(embedding),							# For cross attention we use the query from the decoder.
                 input_for_cross_attention, 						# Used for cross attention key.
                 input_for_cross_attention, 						# User for cross attention value.
-                causal_mask,
+                mask,
                 self.drouput
             )
             
         return head_context_vector
 
-    def scaled_dot_product_attention(query, key, value, causal_mask=None, dropout: nn.Dropout):
+    def scaled_dot_product_attention(query, key, value, mask=None, dropout: nn.Dropout):
 
         # The q/k/v inputs are expected to be tensors with 3 dimensions: [batch_size, seq_len, embed_size].
         # Example is [1, 5, 768] for sequences of length 5 with embeddings of size 768 -> 768 is reduced by W matrices as per the above.
