@@ -273,65 +273,74 @@ class MultiHeadAttention(nn.Module):
         return multihead_context_vector
 
 class AttentionHead(nn.Module):
+
+    # Vanilla implementation of attention head that receives the full embedding and reduces the dimensionality via dedicated W matrices.
+    # Alternative approach splits the embedding and gives each head only a subset - we don't do that here.
+    # Essentially, an attention head receives an embedding and returns (attention_weights * values) where output dim is embedding size // number of heads.
+    # This output dim formula is just convention, technically we can output any dimension.
+    # The calculation of the attn_head_output_dim is done in the the multi head class since that one knows how many heads we have.
     
-    def __init__(self, attn_head_input_dim, attn_head_output_dim):
+    def __init__(self, attn_head_input_dim, attn_head_output_dim, type='self'):
         super().__init__()
         
+        self.type = type
+
         self.Wq = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
-        self.Wk = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
+        if type is not 'self':
+            self.Wk = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
+            # Note: technically Wv can have an output_dim that is different from the output_dim of Wq and Wk.
+            #       Wq and Wk must have the same ouput_dim since we're doing dot product with the outputs.
+            self.Wv = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
+        self.dropout = nn.Dropout(config['dropout_prob'])
 
-#       Note: technically Wv can have an output_dim that is different from the output_dim of Wq and Wk
-#       Wq and Wk must have the same ouput_dim since we're doing dot product with the outputs
+    def forward(self, embedding, causal_mask, input_for_cross_attention=None): 
 
-        self.Wv = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
-
-        self.dropout = nn.Dropout(config.dropout_prob)
-
-#   What is fed in into an attention head can be the whole embedding, or a part of the embedding if the case where
-#   each attention head gets a portion of the embedding. In this case each head still gets the whole sequence, but only
-#   a portion of the original embedding -> input_size == embedding / nr_of_heads
-
-    def forward(self, embedding_or_embedding_div_by_nr_of_heads, mask, encoder_output_as_key=None, encoder_output_as_value=None): # Last two are for Decoder cross attention
-        
-        if key is not None and value is not None:
+        if self.type == 'self':
             head_context_vector = scaled_dot_product_attention(
-                self.Wq(embedding_or_embedding_div_by_nr_of_heads),
-                encoder_output_as_key,
-                encoder_output_as_value,
-                mask
-            )
-        elif key is None and value is None:
-            head_context_vector = scaled_dot_product_attention(
-                self.Wq(embedding_or_embedding_div_by_nr_of_heads),
-                self.Wk(embedding_or_embedding_div_by_nr_of_heads),
-                self.Wv(embedding_or_embedding_div_by_nr_of_heads),
-                mask
+                self.Wq(embedding),
+                self.Wk(embedding),
+                self.Wv(embedding),
+                causal_mask,
+                self.dropout
             )
         else:
-            print("We need both they keys and the vaues from the Encoder and we only got one of them")
-            sys.exit()
-
+            head_context_vector = scaled_dot_product_attention(
+                self.Wq(embedding),							# For cross attention we use the query from the decoder.
+                input_for_cross_attention, 						# Used for cross attention key.
+                input_for_cross_attention, 						# User for cross attention value.
+                causal_mask,
+                self.drouput
+            )
+            
         return head_context_vector
 
-#     The q/k/v inputs are expected to be tensors with 3 dimensions: [batch_number, sequence_in_the_batch, embedding_in_the_sequence]
-#     Example is [1, 5, 768] for sequences of length 5 with embeddings of size 768 -> normally this 768 is reduced by Wq or Wk, Wq and Wk need to have same size 
-#     because we need to make a dot product from them, Wv can be different size
-#     Transpose (1,2) makes the key in format [1, 768, 5] so that when we do Q * K the result is [1, 5, 5] as we multiply the "deepest" matrix
-#     That last 5 here is correct: you get one attention score per input_id/token in the sequence 
-#     When then multiply each softmaxed score/attention weight with the corresponding value, [1, 5, 5] * [1, 5, <val size>] to go to [1, 5, <val size>] (returned)
-#     Here val size is 768 as well (normally reduced by Wv) but it does not have to be the same as Query/Key (reduced by Wq/Wk)
+    def scaled_dot_product_attention(query, key, value, causal_mask=None, dropout: nn.Dropout):
 
-#    def scaled_dot_product_attention(query, key, value, mask=None, dropout: nn.Dropout):
-    def scaled_dot_product_attention(query, key, value, mask=None):
-        dimension_of_key = key.size(-1)
-        attention_scores = torch.bmm(query, key.transpose(1,2)) / sqrt(dimension_of_key)
+        # The q/k/v inputs are expected to be tensors with 3 dimensions: [batch_size, seq_len, embed_size].
+        # Example is [1, 5, 768] for sequences of length 5 with embeddings of size 768 -> 768 is reduced by W matrices as per the above.
+        # Transpose (-2,-1) puts the key in format [1, 768, 5] so that when we do Q * K the result is [1, 5, 5] as we multiply the "deepest" matrix.
+        # This essentially is the "resonance" of each word with each other word.
+        # When then multiply each softmaxed attention weight with the corresponding value, [1, 5, 5] * [1, 5, <val size>] to go to [1, 5, <val size>] (returned).
+        # Note that in our implementation <val size> will be 5 as well, although technically is does not have to be.
+
+        dim_of_key = key.size(-1)							# Can use dim of query as well, have to be the same.
+        attention_scores = torch.bmm(query, key.transpose(-2,-1))/sqrt(dim_of_key)	# Normalized dot product.
+
         if mask is not None:
-            attention_scores = scores.masked_fill(mask == 0, float("-inf"))
-#        attention_weights = F.softmax(scores, dim=-1) # Using log softmax provides more training stability
-        attention_weights = torch.log_softmax(scores, dim=-1)
-#       if dropout is not None:
-#           attention_weights = dropout(attention_weights)
-        return attention_weights.bmm(value)
+            # Softmax has e ** x in the numerator, and e ** -inf == 0. Having 0 as the attention score is our objective with the causal mask.
+            attention_scores = attention_scores.masked_fill(mask == 0, float("-inf"))
+
+            # Note to understand how the mask is used:
+            # When we multiply query with key, we essentially measure the resonance of every word with every word in the sequence.
+            # However, for the first word, we don't want to do that for any word that follows (and so on for 2nd, 3rd word ...).
+            # 
+
+
+        attention_weights = attention_scores.softmax(dim = -1)
+        if dropout is not None:
+           attention_weights = dropout(attention_weights)
+        # return attention_weights.bmm(value), attention_weights			# To do: incorporate attention_weights for visualization.
+        return attention_weights.bmm(value)						# Attention weights * values == head context vector.
 
 def build_transformer(encoder_vocab_size, decoder_vocab_size, encoder_seq_len, decoder_seq_len) -> Transformer:
 
