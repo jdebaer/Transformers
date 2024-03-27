@@ -9,8 +9,8 @@ class EncoderForSequenceClassification(nn.Module):
         super().__init__()
 
         self.encoder = Encoder(config)
-        self.dropout = nn.Dropout(config.dropout_prob)
-        self.classifier = nn.Linear(config.embed_size, config.num_labels)
+        self.dropout = nn.Dropout(config['dropout_prob'])
+        self.classifier = nn.Linear(config['embed_size'], config['num_labels'])
 
     def forward(self,input_ids):
 
@@ -246,7 +246,7 @@ class AttentionHead(nn.Module):
         self.type = type
 
         self.Wq = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
-        if self.type is not 'self':
+        if self.type == 'self':
             self.Wk = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
             # Note: technically Wv can have an output_dim that is different from the output_dim of Wq and Wk.
             #       Wq and Wk must have the same ouput_dim since we're doing dot product with the outputs.
@@ -262,21 +262,21 @@ class AttentionHead(nn.Module):
                 self.Wq(embedding),
                 self.Wk(embedding),
                 self.Wv(embedding),
-                mask,
-                self.dropout
+                self.dropout,
+                mask
             )
         else:
             head_context_vector = scaled_dot_product_attention(
                 self.Wq(embedding),							# For cross attention we use the query from the decoder.
                 input_for_cross_attention, 						# Used for cross attention key.
                 input_for_cross_attention, 						# User for cross attention value.
-                mask,
-                self.drouput
+                self.drouput,
+                mask
             )
             
         return head_context_vector
 
-    def scaled_dot_product_attention(query, key, value, mask=None, dropout: nn.Dropout):
+    def scaled_dot_product_attention(query, key, value, dropout: nn.Dropout, mask=None):
 
         # The q/k/v inputs are expected to be tensors with 3 dimensions: [batch_size, seq_len, embed_size].
         # Example is [1, 5, 768] for sequences of length 5 with embeddings of size 768 -> 768 is reduced by W matrices as per the above.
@@ -311,14 +311,11 @@ class AttentionHead(nn.Module):
         # return attention_weights.bmm(value), attention_weights			# To do: incorporate attention_weights for visualization.
         return attention_weights.bmm(value)						# Attention weights * values == head context vector.
 
-def build_transformer(encoder_vocab_size, decoder_vocab_size, encoder_seq_len, decoder_seq_len) -> Transformer:
+def build_transformer(config, encoder_vocab_size, decoder_vocab_size, encoder_seq_len, decoder_seq_len) -> Transformer:
 
     transformer = Transformer(config, encoder_vocab_size, decoder_vocab_size, encoder_seq_len, decoder_seq_len)
-
 #    Parameter initialization
-
     for p in transformer.parameters():
         if p.dim() > 1:
             nn.init.xavier_uniform(p)
-
     return transformer

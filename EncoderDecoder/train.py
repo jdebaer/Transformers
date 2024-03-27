@@ -12,7 +12,7 @@ from tqdm import tqdm
 import warnings
 
 from dataset import BilingualDataset, causal_mask
-from model import build_transformer
+from transformer import build_transformer
 from config import get_weights_file_path, get_config
 
 from torch.utils.tensorboard import SummaryWriter
@@ -178,7 +178,7 @@ def get_dataset(config):
 
 def get_model(config, src_vocab_size, tgt_vocab_size):
 
-    model = build_transformer(src_vocab_size, tgt_vocab_size, config.seq_len, config.seq_len) # build_transformer can take different seq_lens if needed
+    model = build_transformer(config, src_vocab_size, tgt_vocab_size, config.seq_len, config.seq_len) # build_transformer can take different seq_lens if needed
     return model
 
 #   If GPU is not big enough for this model then we can reduce number of heads and/or number of layers
