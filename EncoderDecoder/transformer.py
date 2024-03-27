@@ -80,11 +80,14 @@ class ProjectionLayer(nn.Module):
     def __init__(self, config, vocab_size):
         super().__init__()
  
-        self.proj = nn.Linear(config.embed_size,vocab_size)
+        self.proj = nn.Linear(config['embed_size'], vocab_size)					# This is tgt_vocab_size.
 
     def forward(self, decoder_output):
-#       (batch, seq_len, config.embed_size) -> (batch, seq_len, vocab_size) with the next word having the highest probability (if greedy is used)        
-        return torch.log_softmax(self.proj(decoder_output), dim = -1)
+        # (batch, seq_len, embed_size) -> (batch, seq_len, vocab_size) with the next word having the highest probability (if greedy is used).        
+        # At each position in the seq_len dimension, we have an embedding that contains context both from encoder and decoder now, and that only
+        # looked at itself + previous tokens/ids for the decoder self-attention. Each of these embeddings is now asked to predict the next word in
+        # parallel. This is what happens during training. This is then compared with the shifted tokens/ids in the label.
+        return torch.log_softmax(self.proj(decoder_output), dim = -1)				# log_softmax for more training stability.:
 
 class Decoder(nn.Module):
 
