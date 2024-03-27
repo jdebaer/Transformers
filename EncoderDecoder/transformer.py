@@ -173,28 +173,21 @@ class Encoder(nn.Module):
 
 class EncoderBlock(nn.Module):
     
-    def __init__(self,config):
+    def __init__(self, config):
         super().__init__()
 
-        self.layer_norm_1 == nn.LayerNorm(config.embed_size)
-        self.layer_norm_2 == nn.LayerNorm(config.embed_size)
-    
-        self.multi_head_attention = MultiHeadAttention(config)
-
+        self.layer_norm_1 == nn.LayerNorm(config['embed_size'])
+        self.layer_norm_2 == nn.LayerNorm(config['embed_size'])
+        self.multi_head_attention = MultiHeadAttention(config, 'self')				# Encoders use self attention.
         self.feed_forward = FeedForward(config)
 
-    def forward(self,embedding, mask):
+    def forward(self, embedding, mask):								# This is the padding mask, no causal mask for encoder.
   
-        norm_embedding = self.layer_norm_1(embedding)
-    
+        norm_embedding = self.layer_norm_1(embedding)						# We are doing pre-layer normalization.
         multihead_context_vector_skip = embedding + self.multi_head_attention(norm_embedding, mask)
-
         norm_multihead_context_vector_skip = self.layer_norm_2(multihead_context_vector_skip)
-
-        encoder_block_cv = multihead_context_vector_skip + self.feed_forward(norm_multihead_context_vector_skip)
-
-        return encoder_block_cv
-
+        encoder_block_context_vector = multihead_context_vector_skip + self.feed_forward(norm_multihead_context_vector_skip)
+        return encoder_block_context_vector
 
 class FeedForward(nn.Module):
 
@@ -203,14 +196,14 @@ class FeedForward(nn.Module):
 
         self.ff1 = nn.Linear(config['embed_size'], config['ff_intermediate_size']) # bias is True by default
         self.ff2 = nn.Linear(config['ff_intermediate_size'], config['embed_size']) # bias is True by default
-        self.gelu = nn.GELU()									# Smoother RELU
+        self.gelu = nn.GELU()									# Smoother RELU.
         self.dropout = nn.Dropout(config['dropout_prob'])
 
     def forward(self,x):
         x = self.ff1(x)
         x = self.gelu(x)
         x = self.ff2(x)
-        x = self.dropout(x) 									# Can also put the dropout before ff2 (but after gelu/relu)
+        x = self.dropout(x) 									# Can also put the dropout before ff2 (but after gelu/relu).
         return x
 
 class MultiHeadAttention(nn.Module):
@@ -240,11 +233,11 @@ class MultiHeadAttention(nn.Module):
     def forward(self, embedding, mask, encoder_output=None):
     
         # Note on the mask: this can be a combination of a causal mask and a padding mask (decoder) or a padding mask only (encoder).
-        if self.type == 'self':										# Self attention mode
+        if self.type == 'self':										# Self attention mode.
             concatenated_head_context_vectors = torch.cat(
                [attention_head(embedding, mask) for attention_head in self.attention_heads], dim=-1 
             )
-        else:												# Cross attention mode
+        else:												# Cross attention mode.
             concatenated_head_context_vectors = torch.cat(
                [attention_head(embedding, mask, encoder_output) for attention_head in self.attention_heads], dim=-1 
             )
