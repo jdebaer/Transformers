@@ -23,9 +23,9 @@ class EncoderForSequenceClassification(nn.Module):
 
 ########## BODY  ##########
 
-class Embedding(nn.Module):
+class Embeddings(nn.Module):
 
-    # An Embedding maps each input id to a vector of size embed_size.
+    # An Embeddings maps each input id to a vector of size embed_size which contains token and position embeddings.
     # For an Encoder-Decoder we'll need two Embedddings, each with their own vocab size and possible also a different seq_len.
 
     def __init__(self, config, vocab_size, seq_len):
@@ -40,6 +40,8 @@ class Embedding(nn.Module):
 
     def forward(self, input_ids):
 
+        # input_ids dim is (batch, seq_len).
+
         assert seq_len == input_ids.size(1), "Sequence length must be the same as the size of dimension 1 in input_ids."
         position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0) 		# Create a [1,seq_len] tensor containing 0,1,2,...
         token_embeddings = self.token_embeddings(input_ids) 				# Some implementations add: "* math.sqrt(embed_size)".
@@ -47,7 +49,7 @@ class Embedding(nn.Module):
         embeddings = token_embeddings + position_embeddings				
         embeddings = self.layer_norm(embeddings) 
         embeddings = self.dropout(embeddings) 
-        return embeddings
+        return embeddings								# Dim is (batch, seq_len, embed_size) 
 
 class Transformer(nn.Module):
 
@@ -89,7 +91,7 @@ class Decoder(nn.Module):
     def __init__(self, config, seq_len):
         super().__init__()
 
-        self.embeddings = Embedding(config, seq_len)
+        self.embedding = Embedding(config, vocab_size, seq_len)
 
         self.layer_norm = nn.LayerNorm(config.embed_size)
 
@@ -99,7 +101,7 @@ class Decoder(nn.Module):
 
     def forward(self, input_ids, decoder_mask, encoder_output, encoder_mask):
         
-        context_vectorized_embeddings = self.embeddings(input_ids) # technically, at this point they are not context_vectorized yet
+        context_vectorized_embeddings = self.embedding(input_ids) # technically, at this point they are not context_vectorized yet
         for decoder_block in self.DecoderBlocks:
             context_vectorized_embeddings = decoder_block(context_vectorized_embeddings, decoder_mask, encoder_output, encoder_mask)
 
@@ -146,30 +148,25 @@ class DecoderBlock(nn.Module):
         
 class Encoder(nn.Module):
 
-    def __init__(self, config, seq_len):
+    def __init__(self, config, vocab_size, seq_len):						# We calculate seq_len, so it's not part of config.
         super().__init__()
 
-        self.embeddings = Embedding(confiq, seq_len)
-
-        self.layer_norm = nn.LayerNorm(config.embed_size)
-
+        self.embeddings = Embeddings(config, vocab_size, seq_len)				# This will be src_vocab_size and scr_seq_len, since encoder.
+        self.layer_norm = nn.LayerNorm(config['embed_size'])
         self.EncoderBlocks = nn.ModuleList(
-           [EncoderBlock(config) for _ in range(config.num_encoderblocks)] 
+           [EncoderBlock(config) for _ in range(config['num_encoderblocks'])] 
         )
 
-    def forward(self, input_ids, mask):
+    def forward(self, input_ids, mask):								# This is the padding mask, no causal mask for encoder.
         
-        context_vectorized_embeddings = self.embeddings(input_ids) # technically, at this point they are not context_vectorized yet
+        context_vectorized_embeddings = self.embeddings(input_ids, mask) 			# Output dim here is (batch, seq_len, embed_size).
         for encoder_block in self.EncoderBlocks:
-            context_vectorized_embeddings = encoder_block(context_vectorized_embeddings, mask)
+            context_vectorized_embeddings = encoder_block(context_vectorized_embeddings, mask)	# Add more and more context.
 
-#       Since we are doing pre-layer normalization, we need to do one final normalization after all the EncoderBlocks have run, as we want to Encoder itself to output something normalized
+	# Since we are doing pre-layer normalization, we need to do one final normalization after 
+        # all the EncoderBlocks have run, as we want to Encoder itself to output something normalized.
         norm_context_vectorized_embeddings = self.layer_norm(context_vectorized_embeddings)
-
-        return norm_context_vectorized_embeddings # now context information is added, by one or more EncoderBlocks
-
-
-
+        return norm_context_vectorized_embeddings 
 
 class EncoderBlock(nn.Module):
     
@@ -178,12 +175,12 @@ class EncoderBlock(nn.Module):
 
         self.layer_norm_1 == nn.LayerNorm(config['embed_size'])
         self.layer_norm_2 == nn.LayerNorm(config['embed_size'])
-        self.multi_head_attention = MultiHeadAttention(config, 'self')				# Encoders use self attention.
+        self.multi_head_attention = MultiHeadAttention(config, 'self')			# Encoders use self attention.
         self.feed_forward = FeedForward(config)
 
-    def forward(self, embedding, mask):								# This is the padding mask, no causal mask for encoder.
+    def forward(self, embedding, mask):							# This is the padding mask, no causal mask for encoder.
   
-        norm_embedding = self.layer_norm_1(embedding)						# We are doing pre-layer normalization.
+        norm_embedding = self.layer_norm_1(embedding)					# We are doing pre-layer normalization.
         multihead_context_vector_skip = embedding + self.multi_head_attention(norm_embedding, mask)
         norm_multihead_context_vector_skip = self.layer_norm_2(multihead_context_vector_skip)
         encoder_block_context_vector = multihead_context_vector_skip + self.feed_forward(norm_multihead_context_vector_skip)
@@ -223,9 +220,7 @@ class MultiHeadAttention(nn.Module):
         attention_head_output_dim = embed_dim // num_attention_heads
         assert embed_dim % num_attention_heads == 0, "Embedding size must be divisible by number of heads" 
         self.attention_heads = nn.ModuleList(
-            
             [AttentionHead(config, attention_head_input_dim, attention_head_output_dim, type) for _ in range(num_attention_heads)]
-
         )
         # What we feed to Wo are the concatenated head context vectors. This concatenation will have the embedding size again.
         self.Wo = nn.Linear(embed_dim, embed_dim)						
