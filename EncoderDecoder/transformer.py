@@ -49,7 +49,7 @@ class Embeddings(nn.Module):
         embeddings = token_embeddings + position_embeddings				
         embeddings = self.layer_norm(embeddings) 
         embeddings = self.dropout(embeddings) 
-        return embeddings								# Dim is (batch, seq_len, embed_size) 
+        return embeddings								# Dim is (batch, seq_len, embed_size). 
 
 class Transformer(nn.Module):
 
@@ -60,17 +60,17 @@ class Transformer(nn.Module):
         self.decoder = Decoder(config, decoder_vocab_size, decoder_seq_len)
         self.projection_layer = ProjectionLayer(config, decoder_vocab_size)
 
-    def encode(self, encoder_input_ids, encoder_mask): # this can be batched or not, note down dimensions to do
+    def encode(self, encoder_input_ids, encoder_mask): 					# At this point dim is (batch, seq_len).
         
         return self.encoder(encoder_input_ids, encoder_mask)
 
-    def decode(self, decoder_input_ids, decoder_mask, encoder_output, encoder_mask):
+    def decode(self, decoder_input_ids, decoder_mask, encoder_output, encoder_mask):	# At this point dim is (batch, seq_len).	
 
         return self.decoder(decoder_input_ids, decoder_mask, encoder_output, encoder_mask)
 
     def project(self, decoder_output):
        
-        return self.projection_layer(decoder_output)
+        return self.projection_layer(decoder_output)					# Output dim is (batch, seq_len, decoder_vocab_size)
 
 
 
@@ -80,7 +80,7 @@ class ProjectionLayer(nn.Module):
     def __init__(self, config, vocab_size):
         super().__init__()
  
-        self.proj = nn.Linear(config['embed_size'], vocab_size)					# This is tgt_vocab_size.
+        self.proj = nn.Linear(config['embed_size'], vocab_size)					# This is decoder_vocab_size in encoder/decoder.
 
     def forward(self, decoder_output):
         # (batch, seq_len, embed_size) -> (batch, seq_len, vocab_size) with the next word having the highest probability (if greedy is used).        
