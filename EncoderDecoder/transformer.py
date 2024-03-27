@@ -88,27 +88,25 @@ class ProjectionLayer(nn.Module):
 
 class Decoder(nn.Module):
 
-    def __init__(self, config, seq_len):
+    def __init__(self, config, vocab_size, seq_len):						# We calculate seq_len, so it's not part of config.
         super().__init__()
 
-        self.embedding = Embedding(config, vocab_size, seq_len)
-
-        self.layer_norm = nn.LayerNorm(config.embed_size)
-
+        self.embeddings = Embeddings(config, vocab_size, seq_len)				# This will be src_vocab_size and scr_seq_len, since encoder.
+        self.layer_norm = nn.LayerNorm(config['embed_size'])
         self.DecoderBlocks = nn.ModuleList(
            [DecoderBlock(config) for _ in range(config.num_decoderblocks)] 
         )
 
-    def forward(self, input_ids, decoder_mask, encoder_output, encoder_mask):
+    def forward(self, input_ids, decoder_mask, encoder_output, encoder_mask):			# Encoder_mask is padding, decoder_mask is padding and causal.
         
-        context_vectorized_embeddings = self.embedding(input_ids) # technically, at this point they are not context_vectorized yet
+        context_vectorized_embeddings = self.embeddings(input_ids) 
         for decoder_block in self.DecoderBlocks:
             context_vectorized_embeddings = decoder_block(context_vectorized_embeddings, decoder_mask, encoder_output, encoder_mask)
 
-#       Since we are doing pre-layer normalization, we need to do one final normalization after all the DecoderBlocks have run, as we want to Decoder itself to output something normalized
+	# Since we are doing pre-layer normalization, we need to do one final normalization after 
+        # all the EncoderBlocks have run, as we want to Encoder itself to output something normalized.
         norm_context_vectorized_embeddings = self.layer_norm(context_vectorized_embeddings)
-
-        return norm_context_vectorized_embeddings # now context information is added, by one or more DecoderBlocks
+        return norm_context_vectorized_embeddings 
 
 class DecoderBlock(nn.Module):
 
