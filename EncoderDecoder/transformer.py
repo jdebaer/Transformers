@@ -115,36 +115,25 @@ class DecoderBlock(nn.Module):
     def __int__(self,config):
         super().__init__()
 
-        self.layer_norm_1 == nn.LayerNorm(config.embed_size)
-        self.layer_norm_2 == nn.LayerNorm(config.embed_size)
-        self.layer_norm_3 == nn.LayerNorm(config.embed_size)
-    
-        self.self_multi_head_attention = MultiHeadAttention(config)
-        self.cross_multi_head_attention = MultiHeadAttention(config)
-
+        self.layer_norm_1 == nn.LayerNorm(config['embed_size'])
+        self.layer_norm_2 == nn.LayerNorm(config['embed_size'])
+        self.layer_norm_3 == nn.LayerNorm(config['embed_size'])
+        self.self_multi_head_attention = MultiHeadAttention(config, 'self')
+        self.cross_multi_head_attention = MultiHeadAttention(config, 'cross')
         self.feed_forward = FeedForward(config)
 
-    def forward(self,embedding, decoder_mask, encoder_output, encoder_mask):
+    def forward(self, embedding, decoder_mask, encoder_output, encoder_mask):			# Encoder_mask is padding, decoder_mask is padding and causal.
         
-        # embedding is what you add to the upcoming skip connection
-   
         norm_embedding = self.layer_norm_1(embedding)
-    
+        # self_multihead_context_vector_skip is what you add to the upcoming skip connection.
         self_multihead_context_vector_skip = embedding + self.self_multi_head_attention(norm_embedding, decoder_mask)
-
-        # self_multihead_context_vector_skip is what you add to the upcoming skip connection
-
         norm_self_multihead_context_vector_skip = self.layer_norm_2(self_multihead_context_vector_skip)
-
-        cross_multihead_context_vector_skip = self_multihead_context_vector_skip + self.cross_multi_head_attention(norm_self_multihead_context_vector_skip, None, encoder_output) 
-
-        # cross_multihead_context_vector_skip is what you add to the upcoming skip connection
-
+        # cross_multihead_context_vector_skip is what you add to the upcoming skip connection.
+        cross_multihead_context_vector_skip = self_multihead_context_vector_skip + self.cross_multi_head_attention(norm_self_multihead_context_vector_skip, encoder_mask, encoder_output) 
         norm_cross_multihead_context_vector_skip = self.layer_norm_3(cross_multihead_context_vector_skip)
-
-        encoder_block_cv = cross_multihead_context_vector_skip + self.feed_forward(norm_cross_multihead_context_vector_skip)
-
-        return encoder_block_cv
+        encoder_block_context_vector = cross_multihead_context_vector_skip + self.feed_forward(norm_cross_multihead_context_vector_skip)
+        # Return is not layer-normalized.
+        return encoder_block_context_vector
         
 class Encoder(nn.Module):
 
@@ -175,15 +164,16 @@ class EncoderBlock(nn.Module):
 
         self.layer_norm_1 == nn.LayerNorm(config['embed_size'])
         self.layer_norm_2 == nn.LayerNorm(config['embed_size'])
-        self.multi_head_attention = MultiHeadAttention(config, 'self')			# Encoders use self attention.
+        self.self_multi_head_attention = MultiHeadAttention(config, 'self')			# Encoders use self attention.
         self.feed_forward = FeedForward(config)
 
     def forward(self, embedding, mask):							# This is the padding mask, no causal mask for encoder.
   
         norm_embedding = self.layer_norm_1(embedding)					# We are doing pre-layer normalization.
-        multihead_context_vector_skip = embedding + self.multi_head_attention(norm_embedding, mask)
+        multihead_context_vector_skip = embedding + self.self_multi_head_attention(norm_embedding, mask)
         norm_multihead_context_vector_skip = self.layer_norm_2(multihead_context_vector_skip)
         encoder_block_context_vector = multihead_context_vector_skip + self.feed_forward(norm_multihead_context_vector_skip)
+        # Return is not layer-normalized.
         return encoder_block_context_vector
 
 class FeedForward(nn.Module):
