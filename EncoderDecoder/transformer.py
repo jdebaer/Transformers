@@ -304,6 +304,12 @@ class AttentionHead(nn.Module):
             # 6,12,18 -> masked_fill(1, 1, 0) gives 6,   12, -inf which softmax turns into .33, .66,  0 -> sums to 1
             # 9,18,27                1, 1, 1        9,   18,   27                          .16, .33, .5 -> sums to 1
             #
+            # Note that if we receive a padding-only mask, the mask will have this form [[[1,1,0]]] i.e., dim (1,1,seq_len), which leads to:
+            #
+            # 1,2,3                                1,2,-inf
+            # 4,5,6 -> masked_fill([[[1,1,0]]]) -> 4,5,-inf
+            # 7,8,9                                7,8,-inf
+            #
 
         attention_weights = attention_scores.softmax(dim = -1)
         if dropout is not None:
