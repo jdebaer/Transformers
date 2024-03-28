@@ -179,11 +179,10 @@ def get_model(config, src_vocab_size, tgt_vocab_size):
         
 def train_model(config):
 
-# Define the device
+    # Define the device.
+    # Note: model and data must be put on the same device. Loss funtion as well if it inherits from torch.nn.
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Using device {device}')
-
-#    It is necessary to have both the model, and the data on the same device, either CPU or GPU, for the model to process data. 
 
     Path(config['model_folder']).mkdir(parents=True, exist_ok=True)    
   
