@@ -1,24 +1,19 @@
 import torch
 import torch.nn as nn
+import warnings
 
 from torch.utils.data import Dataset, DataLoader, random_split
-
 from datasets import load_dataset
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.trainers import WordLevelTrainer
 from tokenizers.pre_tokenizers import Whitespace
 from tqdm import tqdm
-import warnings
-
 from dataset import BilingualDataset, causal_mask
 from transformer import build_transformer
 from config import get_weights_file_path, get_config
-
 from torch.utils.tensorboard import SummaryWriter
-
 from pathlib import Path
-
 
 def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_padding_mask_batch, src_tokenizer, tgt_tokenizer, max_len, device): # Fix these to be more representative 
 
@@ -119,7 +114,6 @@ def get_all_sentences(dataset, language):
     
     for item in dataset:
         yield item['translation'][language]
-
 
 def get_or_build_tokenizer(config, dataset, language):
 
