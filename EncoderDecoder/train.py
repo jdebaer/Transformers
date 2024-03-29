@@ -55,24 +55,26 @@ def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_b
         decoder_output_tensor_batch = model.decode(decoder_input_tensor_batch, decoder_input_tensor_mask_batch, encoder_output_tensor_batch, encoder_input_tensor_mask_batch) 
 
         # Now we feed ONLY THE LAST ([:,-1]) context vector in the predicted sequence so far to the projection layer to predict the next id.
-        # So what we feed in has dim (1, 1, embed_size) so the last context vector which has all the context for the previous ids.
-        # Dim of probabilities consequently is (1, 1, tgt_vocab_size) .
+        # What we feed in has dim (1, embed_size) so the last context vector which has all the context for the previous ids.
+        # Dim of probabilities consequently is (1, tgt_vocab_size) .
         probabilities = model.project(decoder_output_tensor_batch[:,-1]) 			
 
-        # Via the probabilities we select the next token (id?) by choosing the one with the hights prob
-        _, next_id = torch.max(probabilities, dim=1) # To do: find out where the id comes from
+        # Via the probabilities we select the next id by choosing the one with the highest probability (greedy).
+        _, next_id = torch.max(probabilities, dim=1) 
 
-        # Now we need to append the next word (id?) to decoder_input_tensor_batch that we created above (in the seq dimension)
-        # item() converts tensor with one element to a standard number (not a tensor)
-        # on first run we go from (1,1) to (1,2) and we keep growing in that dimension -> we always only need to project with last one (is new word added in previous run)
-        decoder_input_tensor_batch = torch.cat([decoder_input_tensor_batch, torch.empty(1,1).fill_(next_id.item()).type_as(encoder_input_tensor_batch).to(device)], dim=1) # dim is the dimension in which we do the concat
+        # Now we need to append the next id to decoder_input_tensor_batch that we created above (in the seq dimension).
+        # item() converts tensor with one element to a standard number (not a tensor).
+        # On the first run our dim goes from (1,1) to (1,2) and we keep growing in that dimension.
+        decoder_input_tensor_batch = torch.cat(
+		[decoder_input_tensor_batch, torch.empty(1,1).fill_(next_id.item()).type_as(encoder_input_tensor_batch).to(device)],
+	dim=1) # dim is the dimension in which we do the concat
     
         if next_id == eos_id:
             break
 
-    return decoder_input_tensor_batch.squeeze(0) # squeeze removes the batch dimension so we end up with a seq tensor containing ids
+    return decoder_input_tensor_batch.squeeze(0) # Remove the batch dimension so we end up with a tensor containing one dimension of ids.
 
-def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, print_msg, global_state, writer, num_examples=2)
+def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, print_msg, global_state, writer, num_examples=2):
 
     # Currently this is a PoC validation, where we print out the target sentence as well as the predicted sentence.
 
@@ -96,27 +98,28 @@ def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_le
 
             # We don't need to pass anything on for the decoder, since we're going to start decoding with '[SOS]'.
             # The output is a (batch_size, seq_len) (or shorter than seq_len) where the last element in dim seq_len is '[EOS]'.
+            # transformer_infer only has one dimension, the size of which is the amount of generated ids.
             transformer_infer = greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_batch, src_tokenizer, tgt_tokenizer, seq_len, device)
 
-            source_text = batch['src_text'][0]
-            target_text = batch['tgt_text'][0]
-            transformer_text_output = tgt_tokenizer.decoder(transformer_infer.detach().cpu().numpy())
+            src_sentence = batch['src_text'][0]
+            tgt_sentence = batch['tgt_text'][0]
+            transformer_infer_sentence = tgt_tokenizer.decode(transformer_infer.detach().cpu().numpy())
 
-            # Lists are for tensorboard
-            #source_texts.append(source_text)
-            #expected.append(target_text)
-            #predicted.append(transformer_text_output)
+            # Lists are for TensorBoard: to do.
+            # src_sentence_tb.append(src_sentence)
+            # tgt_sentence_tb.append(tgt_sentence)
+            # prd_sentence_tb.append(transformer_infer_sentence)
 
-            # don't use regular print function as it will mess up tqdm
+            # Don't use the regular print function as it will mess up tqdm.
             print_msg('-' * console_width)
-            print_msg(f'SOURCE: {source_text}')
-            print_msg(f'TARGET: {target_text}')
-            print_msg(f'PREDICTED: {transformer_text_output}')
+            print_msg(f'SOURCE: {src_sentence}')
+            print_msg(f'TARGET: {tgt_sentence}')
+            print_msg(f'PREDICTED: {transformer_infer_sentence}')
 
             if count == num_examples:
                 break
 
-#    if writer: # This is tensorboard
+#    if writer: 	# To do: TensorBoard. 
 #        # To do: TorchMetrics add this CharErrorRate, BLEU, WordErrorRate
         
     
@@ -129,11 +132,15 @@ def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_le
 def get_all_sentences(dataset, language):
     
     for item in dataset:
+        print('ok')
+        print(item)
+        print('well')
+        exit(0)
         yield item['translation'][language]
 
 def get_or_build_tokenizer(config, dataset, language):
 
-    tokenizer_path = Path(config.tokenizer_file.format(language))
+    tokenizer_path = Path(config['tokenizer_file'].format(language))
     
     if not Path.exists(tokenizer_path):
         # We create a tokenizer from scratch.
@@ -152,7 +159,12 @@ def get_dataloader(config):
     # This function eventually wants to set up BilingualDataset objects. Let's first stage all we need for that.
     
     # 1. We need the raw dataset. We use load_dataset from Hugging Face's datasets for that.
-    dataset_raw = load_dataset('opus_books', f'{config['src_language']}-{config['tgt_language']}', split='train')
+    print(config['src_language'])
+    print(config['tgt_language'])
+    # dataset_raw = load_dataset('opus_books', f"{config['src_language']}-{config['tgt_language']}", split='train', streaming=True)
+    dataset_raw = load_dataset("opus_books", "en-fr", split='train', streaming=True)
+    for row in dataset_raw:
+        print(row)
 
     # 2. We also need tokenizers, one for each raw dataset language subset.
     src_tokenizer = get_or_build_tokenizer(config, dataset_raw, config['src_language'])
@@ -225,7 +237,7 @@ def train_model(config):
     # config['preload'] is the last epoch that we successfully completed training with.
     if config['preload']:
         model_filename = get_model_file_path(config, config['preload'])
-        print(f'Preloading model {model_filename}'
+        print(f'Preloading model {model_filename}')
         state = torch.load(model_filename)
         initial_epoch = state['epoch'] + 1
         optimizer.load_state_dict(state['optimizer_state_dict']) 		# Don't forget to restore the optimizer state as well.
@@ -238,7 +250,7 @@ def train_model(config):
     # To do: implement your own CEL: https://discuss.pytorch.org/t/cross-entropy-loss-clarification/103830/2.
     loss_function = nn.CrossEntropyLoss(ignore_index=src_tokenizer.token_to_id('[PAD]'), label_smoothing=0.1).to(device)    
 
-    for epoch in range(initial_epoch, config['num_epochs']:
+    for epoch in range(initial_epoch, config['num_epochs']):
 
         # model.train() 							# Put model.train() here if you run validation after each epoch.
         batch_iterator = tqdm(train_dataloader, desc=f'Processing epoch {epoch:02d}') # tqdm is what draws the nice progress bars, wrap it around DataLoader

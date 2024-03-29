@@ -5,10 +5,9 @@ def get_config():
         'batch_size': 8,
         'num_epochs': 20,
         'lr': 10**-4,
-        'seq_len': 350
-        'embed_size': 512
+        'embed_size': 512,
         'src_language': 'en',
-        'tgt_language': 'fr',
+        'tgt_language': 'it',
         'model_folder': 'weights',
         'model_basename': 'tmodel_',
         'preload': None,
