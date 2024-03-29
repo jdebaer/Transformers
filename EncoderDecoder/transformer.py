@@ -1,7 +1,9 @@
 import torch
 import torch.nn as nn
 
+##########################
 ########## HEAD ##########
+
 
 class EncoderForSequenceClassification(nn.Module):
 
@@ -20,8 +22,10 @@ class EncoderForSequenceClassification(nn.Module):
         return classification
 
 ########## HEAD ##########
+##########################
 
-########## BODY  ##########
+##########################
+######### BODY  ##########
 
 class Embeddings(nn.Module):
 

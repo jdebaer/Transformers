@@ -11,36 +11,53 @@ from tokenizers.pre_tokenizers import Whitespace
 from tqdm import tqdm
 from dataset import BilingualDataset, causal_mask
 from transformer import build_transformer
-from config import get_weights_file_path, get_config
+from config import get_config
 from torch.utils.tensorboard import SummaryWriter
 from pathlib import Path
 
-def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_padding_mask_batch, src_tokenizer, tgt_tokenizer, max_len, device): # Fix these to be more representative 
 
-    sos_id = src_tokenizer.token_to_id('[SOS]') # Either tokenizer can be used for this
-    eos_id = src_tokenizer.token_to_id('[EOS]') # Either tokenizer can be used for this
+def get_model_file_path(config, epoch: str):
+    model_folder = config['model_folder']
+    model_basename = config['model_basename']
+    model_filename = f'{model_basename}{epoch}.pt'
+    return str(Path('.') / model_folder / model_filename)
 
-    # Now get the encoder output and we're going to use it for every token we predict with the decoder, for the cross attention
-    encoder_output_tensor_batch = model.encode(encoder_input_tensor_batch, encoder_input_tensor_padding_mask_batch) # dim (batch_size, seq_len, embed_size)
+##########################
+####### VALIDATION #######
 
-    # Now get the decoder started with just the [SOS] token
-    decoder_input_tensor_batch = torch.empty(1,1).fill_(sos_id).type_as(encoder_input_tensor_batch).to(device) # dim (b_s, seq_len) but 1 and still 1 here since 1 token
+
+def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_batch, src_tokenizer, tgt_tokenizer, max_len, device): 
+
+    # Note: would not work on a batch with more than 1 items in it. Need to rework this for validation better than PoC if we really want to batch.
+
+    sos_id = src_tokenizer.token_to_id('[SOS]') 							# Either tokenizer can be used for this.
+    eos_id = src_tokenizer.token_to_id('[EOS]') 							# Either tokenizer can be used for this.
+
+    # Generate the encoder output. We'll use it in every decoder invocation where we predict the next id.
+    encoder_output_tensor_batch = model.encode(encoder_input_tensor_batch, encoder_input_tensor_mask_batch) # Dim (1, seq_len, embed_size).
+
+    # Now get the decoder started with just the [SOS] token.
+    decoder_input_tensor_batch = torch.empty(1,1).fill_(sos_id).type_as(encoder_input_tensor_batch).to(device) # Dim at this point is (1,1).
     
-    # Now we're going keep predicting the next token until we get [EOS] or until we reach max_len
+    # Now use the decoder with cross attention to keep predicting the next id until we get the '[EOS]' id or until we reach max_len (which is seq_len).
     while True:
-        if decoder_input_tensor_batch.size(1) == max_len: # dim 0 is the batch
-            break
+        if decoder_input_tensor_batch.size(1) == max_len: 						# We filled it up with the previous iteration.
+            break											# Note no '[EOS]' id in this case.
      
-        # At each inference we need to provide an inference-specific causal mask, which shorten on each iteration
-        decoder_input_tensor_causal_mask_batch = causal_mask(decoder_input_tensor_batch.size(1)).type_as(encoder_input_tensor_padding_mask_batch).to(device)
+        # You might ask why we need a causal mask, since we start predicting from '[SOS]'.
+        # This is because on every iteration, our model predicts the next id for EVERY id that we provide as input, not just for the last id.
+        # As we will see, we ignore all these 'previous words' predictions, so an open question is: do we actually need to causal mask.
+        # Note that there is for sure no padding going on, so we don't need to mask for padding in the decoder.
+        decoder_input_tensor_mask_batch = causal_mask(decoder_input_tensor_batch.size(1)).type_as(encoder_input_tensor_mask_batch).to(device)
         
-        # Do inference using the decoder, providing it the cross attention
-        decoder_output_tensor_batch = model.decode(decoder_input_tensor_batch, decoder_input_tensor_causal_mask_batch, encoder_output_tensor_batch, encoder_input_tensor_padding_mask_batch) 
+        # Do inference using the decoder, while providing it with the cross attention of dim (batch_size, seq_len) which here is (1, seq_len).
+        # Dim is (batch_size, <how many ids we have so far in the sequence>, embed_size) with batch_size being 1 here.
+        decoder_output_tensor_batch = model.decode(decoder_input_tensor_batch, decoder_input_tensor_mask_batch, encoder_output_tensor_batch, encoder_input_tensor_mask_batch) 
 
-        # Get the next token
-        # transformer_output_tensor_batch is a set of probabilities that have been softmaxed
-        # we only need these for the last element in the seq_len dimension (as we are not training), hence the [:,-1]
-        probabilities = model.project(decoder_output_tensor_batch[:,-1]) # dim is (batch_size, seq_len, tgt_vocab_size)
+        # Now we feed ONLY THE LAST ([:,-1]) context vector in the predicted sequence so far to the projection layer to predict the next id.
+        # So what we feed in has dim (1, 1, embed_size) so the last context vector which has all the context for the previous ids.
+        # Dim of probabilities consequently is (1, 1, tgt_vocab_size) .
+        probabilities = model.project(decoder_output_tensor_batch[:,-1]) 			
 
         # Via the probabilities we select the next token (id?) by choosing the one with the hights prob
         _, next_id = torch.max(probabilities, dim=1) # To do: find out where the id comes from
@@ -54,39 +71,36 @@ def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_paddin
             break
 
     return decoder_input_tensor_batch.squeeze(0) # squeeze removes the batch dimension so we end up with a seq tensor containing ids
-        
-        
-        
 
+def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, print_msg, global_state, writer, num_examples=2)
 
+    # Currently this is a PoC validation, where we print out the target sentence as well as the predicted sentence.
 
-#def run_validation(model, val_dataset, src_tokenizer, tgt_tokenizer, max_len, device, print_msg, global_state, writer, num_examples=2)
-    # Note: val_dataset is not correct here, this has to be a batch_iterator wrapped around a data_loader or at least a data_loader which can provide batches
-
-def run_validation(model, val_dataloader, src_tokenizer, tgt_tokenizer, max_len, device, print_msg, global_state, writer, num_examples=2)
-
-    model.eval()
+    model.eval()											# Put model in eval mode.
     count = 0
-    source_texts = []
-    expected = []
-    predicted = []
+    src_sentence_tb = []
+    tgt_sentence_tb = []
+    prd_sentence_tb = []
       
-    console_width = 80 # Size of the control window
+    console_width = 80 											# Size of the control window.
 
-    with torch.no_grad(): # Disable gradient calculation to make it faster
+    with torch.no_grad(): 										# Disable gradient calculation to speed up validation.
 
-        for batch in val_dataloader: # Remember that for the validation dataloader we have set a batch size of 1
+        for batch in valid_dataloader: 									# Validation batch size is currently 1.
             count += 1
             
-            encoder_input_tensor_batch = batch['encoder_input_tensor'].to(device) # dimension is (batch_size,seq_len)
-            encoder_input_tensor_padding_mask_batch = batch['encoder_input_tensor_padding_mask'].to(device) # dimension is (batch_size,1,1,seq_len)
+            encoder_input_tensor_batch = batch['encoder_input_tensor'].to(device) 			# Dim is (batch_size,seq_len).
+            encoder_input_tensor_mask_batch = batch['encoder_input_tensor_mask'].to(device) 		# Dim is (batch_size,1,1,seq_len).
 
-            assert encoder_input_tensor_batch.size(0) == 1, "Batch size for validation must be 1"
+            assert encoder_input_tensor_batch.size(0) == 1, "Batch size for validation must be 1."
 
-            transformer_id_output = greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_padding_mask_batch, src_tokenizer, tgt_tokenizer, max_len, device)
+            # We don't need to pass anything on for the decoder, since we're going to start decoding with '[SOS]'.
+            # The output is a (batch_size, seq_len) (or shorter than seq_len) where the last element in dim seq_len is '[EOS]'.
+            transformer_infer = greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_batch, src_tokenizer, tgt_tokenizer, seq_len, device)
+
             source_text = batch['src_text'][0]
             target_text = batch['tgt_text'][0]
-            transformer_text_output = tgt_tokenizer.decoder(transformer_id_output.detach().cpu().numpy())
+            transformer_text_output = tgt_tokenizer.decoder(transformer_infer.detach().cpu().numpy())
 
             # Lists are for tensorboard
             #source_texts.append(source_text)
@@ -106,9 +120,11 @@ def run_validation(model, val_dataloader, src_tokenizer, tgt_tokenizer, max_len,
 #        # To do: TorchMetrics add this CharErrorRate, BLEU, WordErrorRate
         
     
+####### VALIDATION #######
+##########################
     
-
-
+##########################
+######## TRAINING ########
 
 def get_all_sentences(dataset, language):
     
@@ -120,63 +136,67 @@ def get_or_build_tokenizer(config, dataset, language):
     tokenizer_path = Path(config.tokenizer_file.format(language))
     
     if not Path.exists(tokenizer_path):
+        # We create a tokenizer from scratch.
         tokenizer = Tokenizer(WordLevel(unk_token='[UNK]'))
         tokenizer.pre_tokenizer = Whitespace()
         trainer = WordLevelTrainer(special_tokens=['UNK', 'PAD', 'SOS', 'EOS'], min_frequency=2)
         tokenizer.train_from_iterator(get_all_sentences(dataset, language), trainer=trainer)
         tokenizer.save(str(tokenizer_path))
     else:
-        tokenizer = Tokenizer.from_file(str(tokinizer_path))
+        tokenizer = Tokenizer.from_file(str(tokenizer_path))
 
     return tokenizer
 
-def get_dataset(config):
+def get_dataloader(config):
+
+    # This function eventually wants to set up BilingualDataset objects. Let's first stage all we need for that.
     
-    dataset_raw = load_dataset('opus_books', f'{config.src_language}-{config.tgt_language}', split='train')
+    # 1. We need the raw dataset. We use load_dataset from Hugging Face's datasets for that.
+    dataset_raw = load_dataset('opus_books', f'{config['src_language']}-{config['tgt_language']}', split='train')
 
-    src_tokenizer = get_or_build_tokenizer(config, dataset_raw, config.src_language)
-    tgt_tokenizer = get_or_build_tokenizer(config, dataset_raw, config.tgt_language)
+    # 2. We also need tokenizers, one for each raw dataset language subset.
+    src_tokenizer = get_or_build_tokenizer(config, dataset_raw, config['src_language'])
+    tgt_tokenizer = get_or_build_tokenizer(config, dataset_raw, config['tgt_language'])
 
-#    Split the training part of data set into a "real" training part and a validation part that you will use after each epoch
-
+    # 3. We split here. Could also do this after we got our BilingualDataset objects.
     train_dataset_size = int(0.9 * len(dataset_raw))
-    val_dataset_size = len(dataset_raw) - train_dataset_size
-    train_dataset_raw, val_dataset_raw = random.split(dataset_raw, [train_dataset_size, val_dataset_size])
+    valid_dataset_size = len(dataset_raw) - train_dataset_size
+    train_dataset_raw, valid_dataset_raw = random.split(dataset_raw, [train_dataset_size, valid_dataset_size])
     
-
-#   Here we're converting strings to something we can actually train with i.e., tensors containing input_ids with padding and other special tokens etc.
-    train_dataset = BilingualDataset(train_dataset_raw, src_tokenizer, tgt_tokenizer, config.src_language, config.tgt_language, config.seq_len)
-    val_dataset = BilingualDataset(val_dataset_raw, src_tokenizer, tgt_tokenizer, config.src_language, config.tgt_language, config.seq_len)
-
-#   New let's find out what the longest sequence is that we have in the dataset
-
-    max_len_src = 0
-    max_len_tgt = 0
+    # 4. We need a seq_len for both the encoder and the decoder
+    src_seq_len = 0
+    tgt_seq_len = 0
+    seq_len = 0
 
     for item in dataset_raw:
         src_ids = src_tokenizer.encode(item['translation'][config.src_language]).ids
         tgt_ids = src_tokenizer.encode(item['translation'][config.tgt_language]).ids
+        src_seq_len = max(src_seq_len, len(src_ids))
+        tgt_seq_len = max(tgt_seq_len, len(tgt_ids))
+    #print(f'Maximum sequence length of tokenized source sentences is {src_seq_len}')
+    #print(f'Maximum sequence length of tokenized target sentences is {tgt_seq_len}')
+    # For now we use the maximum of the two as our joint seq_len.
+    seq_len = max(src_seq_len, tgt_seq_len)
+    print(f'We use sequence length {seq_len}')
+    
 
-        max_len_src = max(max_len_src, len(src_ids))
-        max_len_tgt = max(max_len_tgt, len(tgt_ids))
+    # Now we can create our BilinguaDataset objects. To do: rewrite so that we can use the right seq_len for encoder and decoder.
+    train_dataset = BilingualDataset(train_dataset_raw, src_tokenizer, tgt_tokenizer, config['src_language'], config['tgt_language'], seq_len)
+    valid_dataset = BilingualDataset(valid_dataset_raw, src_tokenizer, tgt_tokenizer, config['src_language'], config['tgt_language'], seq_len)
 
-    print(f'Maximum length of source sentences is {max_len_src}')
-    print(f'Maximum length of target sentences is {max_len_tgt}')
+    # Now we wrap these __get_item()__ Datasets in DataLoaders so that we get batches.
 
-#    Now create the data loaders to batch the training samples up
+    train_dataloader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True)
+    valid_dataloader = DataLoader(valid_dataset, batch_size=1, shuffle=True) # For validation we're doing one by one for now.
 
-    train_dataloader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=1, shuffle=True) # For validation we're doing one by one, find out why this is
+    return train_dataloader, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len
 
-    return train_dataloader, val_dataloader, src_tokenizer, tgt_tokenizer
+def get_model(config, src_vocab_size, tgt_vocab_size, seq_len):
 
-def get_model(config, src_vocab_size, tgt_vocab_size):
-
-    model = build_transformer(config, src_vocab_size, tgt_vocab_size, config.seq_len, config.seq_len) # build_transformer can take different seq_lens if needed
+    model = build_transformer(config, src_vocab_size, tgt_vocab_size, seq_len, seq_len) # To do: use the right seq_len for encoder and decoder.
+    # Note: if GPU RAM is not big enough we can reduce number of heads and/or number of layers and/or batch size.
     return model
 
-#   If GPU is not big enough for this model then we can reduce number of heads and/or number of layers
-        
 def train_model(config):
 
     # Define the device.
@@ -186,109 +206,102 @@ def train_model(config):
 
     Path(config['model_folder']).mkdir(parents=True, exist_ok=True)    
   
-    train_dataloader, val_dataloader, src_tokenizer, tgt_tokenizer = get_dataset(config) 
+    # Get our data loaders.
+    train_dataloader, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len = get_dataloader(config) 
 
-    model = get_model(config, src_tokenizer.get_vocab_size(), tgt_tokenizer.get_vocab_size()).to(device) # Here we send the model to the device
+    # Get our model.
+    model = get_model(config, src_tokenizer.get_vocab_size(), tgt_tokenizer.get_vocab_size(), seq_len).to(device) # Send model to device.
 
-# TensorBoard to visualize the loss/charts
-
+    # To do: set up a TensorBoard writer
     writer = SummaryWriter(config['experiment_name'])    
-
+    
+    # Get our optimizer to update the weights.
     optimizer = toch.optim.Adam(model.parameters(), lr=config['lr'], eps=1e-9)
 
-#   We want to be able to resume the training if something crashes, based on model state and optimizer state (latter is optional but helps)
-
+    # Create some resilience so that we don't have to start training from scratch if there is a crash during training.
     initial_epoch = 0
     global_step = 0
 
+    # config['preload'] is the last epoch that we successfully completed training with.
     if config['preload']:
-        model_filename = get_weights_file_path(config, config['preload'])
+        model_filename = get_model_file_path(config, config['preload'])
         print(f'Preloading model {model_filename}'
         state = torch.load(model_filename)
         initial_epoch = state['epoch'] + 1
-        optimizer.load_state_dict(state['optimizer_state_dict'])
-        global_step = state['global_step']
+        optimizer.load_state_dict(state['optimizer_state_dict']) 		# Don't forget to restore the optimizer state as well.
+        global_step = state['global_step'] 					# This is for TensorBoard, not using this yet.
         
+    # Notes on loss function:
+    # We're subclassing via nn, so we have to put this loss function on the device as well since it has parameters.
+    # We can use either tokenizer to find the input id for '[PAD]'.
+    # The label smoothing here takes 0.1% of the highest score and distributes it over the others - this makes the model more accurate.
+    # To do: implement your own CEL: https://discuss.pytorch.org/t/cross-entropy-loss-clarification/103830/2.
     loss_function = nn.CrossEntropyLoss(ignore_index=src_tokenizer.token_to_id('[PAD]'), label_smoothing=0.1).to(device)    
-    # The label smoothing here takes 0.1% of the highest score and distributes it over the others - this makes the model more accurate
-    # note: implement your own CEL: https://discuss.pytorch.org/t/cross-entropy-loss-clarification/103830/2
-
-    # About the to(device) on the loss function:
-    #The to() move happens to only parameters and buffers. Hence, moving a loss function like CrossEntropy to GPU doesn’t change anything. 
-    #In a custom Loss function made subclassing nn.Module, the “.to()” will be inherited and will move any parameters/buffers to the gpu.
-    #It depends on the inputs you are passing to this loss function. I.e. if the model output and targets are on the GPU, the computation 
-    #will also be performed on the GPU. If your custom loss function has internal states stored as tensors you should move it to the same 
-    # device before calculating the loss. If it’s stateless you can just pass the inputs to it to calculate the loss.
 
     for epoch in range(initial_epoch, config['num_epochs']:
 
-        # model.train() normally we run validation after each epoch, not after each batch
+        # model.train() 							# Put model.train() here if you run validation after each epoch.
         batch_iterator = tqdm(train_dataloader, desc=f'Processing epoch {epoch:02d}') # tqdm is what draws the nice progress bars, wrap it around DataLoader
 
         for batch in batch_iterator:
  
-            model.train() # Because we run validation after every BATCH (and not epoch) we need to put the model back in train() mode at the start of each batch
+            model.train() 							# Put model.train() here if you run validation after each batch.
 
-            # Below is how we push the data to the GPU as well (the model is already there)
-            # If this stuff doesn't fit on the GPU mem then you get a runtime CUDA out of mem error
-            # Note that these are batched returns of our __get_item()__ function in dataset
+            # The model is on the device, so we also need to put all the data (parameters, buffers) it needs on the device.
+            # Note: if this stuff doesn't fit in the GPU mem then you get a runtime CUDA out of mem error.
 
-            encoder_input_tensor_batch = batch['encoder_input_tensor'].to(device) # dimension is (batch_size,seq_len)
-            decoder_input_tensor_batch = batch['decoder_input_tensor'].to(device) # dimension is (batch_size_seq_len)
-            encoder_input_tensor_padding_mask_batch = batch['encoder_input_tensor_padding_mask'].to(device) # dimension is (batch_size,1,1,seq_len)
-            decoder_input_tensor_causal_mask_batch = batch['decoder_input_tensor_causal_mask'].to(device) # dimension is (batch_size,1,seq_len,seq_len)
-            # decoder_label_tensor = batch['decoder_label_tensor'].to(device)
+            encoder_input_tensor_batch = batch['encoder_input_tensor'].to(device) 				# dim is (batch_size,seq_len).
+            decoder_input_tensor_batch = batch['decoder_input_tensor'].to(device) 				# dim is (batch_size_seq_len).
+            encoder_input_tensor_mask_batch = batch['encoder_input_tensor_mask'].to(device) 			# dim is (batch_size,1,1,seq_len).
+            decoder_input_tensor_mask_batch = batch['decoder_input_tensor_mask'].to(device) 			# dim is (batch_size,1,seq_len,seq_len).
+            decoder_label_tensor_batch = batch['decoder_label_tensor'].to(device)                               # dim is (batch, seq_len).
             
-            # Now push the training data tensors through the transformer (the whole batch)
+            # Now push the training data tensors through the transformer in 3 steps: encode, decode, project.
+            # 1. Encode.
+            # Dim of output is (batch_size, seq_len, embed_size).
+            encoder_output_tensor_batch = model.encode(encoder_input_tensor_batch, encoder_input_tensor_padding_mask_batch) 
 
-            encoder_output_tensor_batch = model.encode(encoder_input_tensor_batch, encoder_input_tensor_padding_mask_batch) # dim (batch_size, seq_len, embed_size)
-            # The below matches 'decode(self, decoder_input_ids, decoder_mask, encoder_output, encoder_mask):' in transformer.py
-            # Dim of the below is also (batch_size, seq_len, embed_size)
+            # 2. Decode, using the output of the encoder that we got in the previous step.
+            # Dim of output below is also (batch_size, seq_len, embed_size).
             decoder_output_tensor_batch = model.decode(decoder_input_tensor_batch, decoder_input_tensor_causal_mask_batch, encoder_output_tensor_batch, encoder_input_tensor_padding_mask_batch )
-            transformer_output_tensor_batch = model.project(decoder_output_tensor_batch) # dim is (batch_size, seq_len, tgt_vocab_size)
-                   
-            # Now let's compare these batched predictions with our batched labels
-            # The label (below) is essentially the same sequence but the ids are shifted with one position (same amount of padding tokens) 
-          
-            decoder_label_tensor_batch = batch['decoder_label_tensor'].to(device) # dim (batch, seq_len)
 
+            # 3. Project.
+            # Dim of output below is (batch_size, seq_len, tgt_vocab_size).
+            transformer_output_tensor_batch = model.project(decoder_output_tensor_batch) 
+                   
+            # Now let's compare these batched predictions with our batched labels.
+            # First view transforms (batch_size, seq_len, tgt_vocab_size) to (batch_size * seq_len, tgt_vocab_size)
+            # label.view(-1) flattens out the complete batch over all seq_lens, so to batch_size * seq_len
+            # To do first: print out what we get here, we should be comparing input ids with input ids.
+            # To do second: nn.CEL seems to already apply log_softmax itself and it seems to be recommended to NOT feed it already softmax-ed input
+            # but the latter is what we are doing.
             loss = loss_fn(transformer_output_tensor_batch.view(-1, tgt_tokenizer.get_vocab_size()), label.view(-1))
 
-            # Couple of issues 
-            # CrossEntropyLoss seems to apply log_softmax itself, and it seems to be recommended to NOT feed it pre-softmaxed inputs, which is however what we're doing
-            # The first view transforms (b_s, seq_len, tgt_vocab_size) to (b_s * seq_len, tgt_vocab_size)
-            # However label.view(-1) will do (b_s, seq_len) -> (b_s * seq_len) 
-            # So while we have probs in the tgt_vocab_size dimension in the prediction (transformer_output_tensor_batch) we don't have 0/1 probs in the label - find out why
+            batch_iterator.set_postfix({f"loss": f"{loss.item():6.3f}"}) 					# Show loss on the tqdm progress bar.
+            writer.add_scaler('train_loss', loss.item(), global_step) 						# This is for TensorBoard, still needs work.
+            writer.flush()											# This is for TensorBoard, still needs work.	
 
-            batch_iterator.set_postfix({f"loss": f"{loss.item():6.3f}"}) # This is for tqdm visualization to show loss on progress bar
-            writer.add_scaler('train_loss', loss.item(), global_step) # This is for TensorBoard
-            writer.flush()
-
-            # Backpropagate the loss
+            # Backpropagate the loss.
             loss.backward()
 
-            # Update the weights (this is the job of the optimizer)
+            # Update the weights.
             optimizer.step()
-            optimizer.zero_grad() # Zero out the gradient
+            optimizer.zero_grad() 										# Zero out the gradient.
 
 
-            run_validation(model, val_dataloader, src_tokenizer, tgt_tokenizer, config['seq_len', device, lambda msg: batch_iterator.write(msg), global_step, writer)
+            run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, lambda msg: batch_iterator.write(msg), global_step, writer)
 
-            global_step += 1 # This is only used by TensorBoard to keep track of the loss
+            global_step += 1 											# Used by TensorBoard to keep track of the loss.
 
-        # Normally run_validation runs here put it here once you have debugged
+        # Put run_validate here to run validation after every epoch - move model.train() accordingly.
 
         # Save the model after every epoch in case of a crash
-        # It's also really needed to save the optimizer as it keeps track of certain statistics, one for each weight, to understand how to optimize each weight independently 
-
-        model_filename = get_weights_file_path(config, f'{epoch:02d}' # Name of the file contains epoch with zeros in front
+        model_filename = get_model_file_path(config, f'{epoch:02d}') 
         torch.save({
             'epoch': epoch,
-            'model_state_dict': model.state_dict(), # This is all the weights of the model
-            'optimizer_state_dict': optimizer.state_dict(),
+            'model_state_dict': model.state_dict(), 								# These are all the weights of the model.
+            'optimizer_state_dict': optimizer.state_dict(),							# Make sure to save optimizer as well.
             'global_step': global_step 
-
-
         }, model_filename)
 
 if __name__ == '__main__':
