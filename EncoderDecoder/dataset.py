@@ -13,8 +13,8 @@ class BilingualDataset(Dataset):
     # - The needed masks: a padding mask for the encoder, and a combined padding/causal mask for the decoder.
     # Note: batching is not done here, that's done in train.py via a data loader that we're wrapping around this class (object).
 
-    def __init__(self, raw_dataset, src_tokenizer, tgt_tokenizer, src_language, tgt_language, seq_len) -> None:
-        self().__init__()
+    def __init__(self, raw_dataset, src_tokenizer, tgt_tokenizer, src_language, tgt_language, seq_len):
+        #self().__init__() # This is an abstract class.
 
         # seq_len here is the same for src/tgt - does not have to be the case, transformer can handle different lens.
 
@@ -26,9 +26,12 @@ class BilingualDataset(Dataset):
         self.seq_len = seq_len
  
         # Tensors with one element that we're going to cat to other tensors later on. We could use the tgt tokenizer for this as well.
-        self.sos_token = torch.Tensor([src_tokenizer.token_to_id(['[SOS]'])], dtype=torch.int64) # 32-bit may not be enough for the input_id range.
-        self.eos_token = torch.Tensor([src_tokenizer.token_to_id(['[EOS]'])], dtype=torch.int64) # 32-bit may not be enough for the input_id range.
-        self.pad_token = torch.Tensor([src_tokenizer.token_to_id(['[PAD]'])], dtype=torch.int64) # 32-bit may not be enough for the input_id range.
+        #self.sos_token = torch.Tensor([src_tokenizer.token_to_id(['[SOS]'])], dtype=torch.int64) # 32-bit may not be enough for the input_id range.
+        #self.eos_token = torch.Tensor([src_tokenizer.token_to_id(['[EOS]'])], dtype=torch.int64) # 32-bit may not be enough for the input_id range.
+        #self.pad_token = torch.Tensor([src_tokenizer.token_to_id(['[PAD]'])], dtype=torch.int64) # 32-bit may not be enough for the input_id range.
+        self.sos_token = torch.tensor([src_tokenizer.token_to_id('[SOS]')], dtype=torch.int64) # 32-bit may not be enough for the input_id range.
+        self.eos_token = torch.tensor([src_tokenizer.token_to_id('[EOS]')], dtype=torch.int64) # 32-bit may not be enough for the input_id range.
+        self.pad_token = torch.tensor([src_tokenizer.token_to_id('[PAD]')], dtype=torch.int64) # 32-bit may not be enough for the input_id range.
         
     def __len__(self):
 
@@ -38,8 +41,10 @@ class BilingualDataset(Dataset):
     def __getitem__(self, index):
 
         src_target_pair = self.raw_dataset[index]
-        src_text = src_target_pair['translation'][self.src_language]
-        tgt_text = src_target_pair['translation'][self.tgt_language]
+        #src_text = src_target_pair['translation'][self.src_language]
+        #tgt_text = src_target_pair['translation'][self.tgt_language]
+        src_text = src_target_pair[self.src_language]
+        tgt_text = src_target_pair[self.tgt_language]
 
         encoder_input_ids = self.src_tokenizer.encode(src_text).ids # First part splits text into tokens, .ids converts these to the integers.
         decoder_input_ids = self.tgt_tokenizer.encode(tgt_text).ids 
@@ -69,7 +74,7 @@ class BilingualDataset(Dataset):
 
         decoder_label_tensor = torch.cat(
             [
-            toch.tensor(decoder_input_ids, dtype=torch.int64),
+            torch.tensor(decoder_input_ids, dtype=torch.int64),
             self.eos_token,
             torch.tensor([self.pad_token] * decoder_num_padding_tokens, dtype=torch.int64)
             ]

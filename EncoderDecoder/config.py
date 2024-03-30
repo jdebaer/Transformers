@@ -2,12 +2,16 @@ from pathlib import Path
 
 def get_config():
     return {
-        'batch_size': 8,
+        'batch_size': 10,
         'num_epochs': 20,
         'lr': 10**-4,
-        'embed_size': 512,
+        'embed_size': 16,
+        'ff_intermediate_size': 32,
+        'num_encoderblocks': 1,
+        'num_decoderblocks': 1,
+        'num_attention_heads': 4,
         'src_language': 'en',
-        'tgt_language': 'it',
+        'tgt_language': 'fr',
         'model_folder': 'weights',
         'model_basename': 'tmodel_',
         'preload': None,

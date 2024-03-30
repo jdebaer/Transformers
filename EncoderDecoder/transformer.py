@@ -37,9 +37,9 @@ class Embeddings(nn.Module):
 
         self.seq_len = seq_len
         self.embed_size = config['embed_size']
-        self.token_embeddings = nn.Embeddings(vocab_size, config.embed_size) 		# Technically these are id embeddings.
-        self.position_embeddings = nn.Embeddings(self.seq_len, config.embed_size) 	# We use a learned position encoding.
-        self.layer_norm = nn.LayerNorm(config.embed_size) 				# This uses the default eps value.
+        self.token_embeddings = nn.Embedding(vocab_size, config['embed_size']) 		# Technically these are id embeddings.
+        self.position_embeddings = nn.Embedding(self.seq_len, config['embed_size']) 	# We use a learned position encoding.
+        self.layer_norm = nn.LayerNorm(config['embed_size']) 				# This uses the default eps value.
         self.dropout = nn.Dropout(config['dropout_prob'])
 
     def forward(self, input_ids):
@@ -101,7 +101,7 @@ class Decoder(nn.Module):
         self.embeddings = Embeddings(config, vocab_size, seq_len)				# This will be src_vocab_size and scr_seq_len, since encoder.
         self.layer_norm = nn.LayerNorm(config['embed_size'])
         self.DecoderBlocks = nn.ModuleList(
-           [DecoderBlock(config) for _ in range(config.num_decoderblocks)] 
+           [DecoderBlock(config) for _ in range(config['num_decoderblocks'])] 
         )
 
     def forward(self, input_ids, decoder_mask, encoder_output, encoder_mask):			# Encoder_mask is padding, decoder_mask is padding and causal.
@@ -117,12 +117,12 @@ class Decoder(nn.Module):
 
 class DecoderBlock(nn.Module):
 
-    def __int__(self,config):
+    def __init__(self,config):
         super().__init__()
 
-        self.layer_norm_1 == nn.LayerNorm(config['embed_size'])
-        self.layer_norm_2 == nn.LayerNorm(config['embed_size'])
-        self.layer_norm_3 == nn.LayerNorm(config['embed_size'])
+        self.layer_norm_1 = nn.LayerNorm(config['embed_size'])
+        self.layer_norm_2 = nn.LayerNorm(config['embed_size'])
+        self.layer_norm_3 = nn.LayerNorm(config['embed_size'])
         self.self_multi_head_attention = MultiHeadAttention(config, 'self')
         self.cross_multi_head_attention = MultiHeadAttention(config, 'cross')
         self.feed_forward = FeedForward(config)
@@ -167,8 +167,8 @@ class EncoderBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        self.layer_norm_1 == nn.LayerNorm(config['embed_size'])
-        self.layer_norm_2 == nn.LayerNorm(config['embed_size'])
+        self.layer_norm_1 = nn.LayerNorm(config['embed_size'])
+        self.layer_norm_2 = nn.LayerNorm(config['embed_size'])
         self.self_multi_head_attention = MultiHeadAttention(config, 'self')			# Encoders use self attention.
         self.feed_forward = FeedForward(config)
 
@@ -209,16 +209,16 @@ class MultiHeadAttention(nn.Module):
         # that still output the embedding size, and then you go and split that output up as per the number of heads.
 
         self.type = type
-        embed_dim = config['embed_dim']
+        embed_size = config['embed_size']
         num_attention_heads = config['num_attention_heads']
-        attention_head_input_dim = embed_dim
-        attention_head_output_dim = embed_dim // num_attention_heads
-        assert embed_dim % num_attention_heads == 0, "Embedding size must be divisible by number of heads" 
+        attention_head_input_dim = embed_size
+        attention_head_output_dim = embed_size // num_attention_heads
+        assert embed_size % num_attention_heads == 0, "Embedding size must be divisible by number of heads" 
         self.attention_heads = nn.ModuleList(
             [AttentionHead(config, attention_head_input_dim, attention_head_output_dim, type) for _ in range(num_attention_heads)]
         )
         # What we feed to Wo are the concatenated head context vectors. This concatenation will have the embedding size again.
-        self.Wo = nn.Linear(embed_dim, embed_dim)						
+        self.Wo = nn.Linear(embed_size, embed_size)						
 
     def forward(self, embedding, mask, encoder_output=None):
     

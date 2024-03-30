@@ -15,7 +15,6 @@ from config import get_config
 from torch.utils.tensorboard import SummaryWriter
 from pathlib import Path
 
-
 def get_model_file_path(config, epoch: str):
     model_folder = config['model_folder']
     model_basename = config['model_basename']
@@ -132,21 +131,18 @@ def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_le
 def get_all_sentences(dataset, language):
     
     for item in dataset:
-        print('ok')
-        print(item)
-        print('well')
-        exit(0)
-        yield item['translation'][language]
+        #yield item['translation'][language]
+        yield item[language]
 
 def get_or_build_tokenizer(config, dataset, language):
 
     tokenizer_path = Path(config['tokenizer_file'].format(language))
     
     if not Path.exists(tokenizer_path):
-        # We create a tokenizer from scratch.
+        print("We create a tokenizer from scratch.")
         tokenizer = Tokenizer(WordLevel(unk_token='[UNK]'))
         tokenizer.pre_tokenizer = Whitespace()
-        trainer = WordLevelTrainer(special_tokens=['UNK', 'PAD', 'SOS', 'EOS'], min_frequency=2)
+        trainer = WordLevelTrainer(special_tokens=['[UNK]', '[PAD]', '[SOS]', '[EOS]'], min_frequency=2)
         tokenizer.train_from_iterator(get_all_sentences(dataset, language), trainer=trainer)
         tokenizer.save(str(tokenizer_path))
     else:
@@ -162,9 +158,8 @@ def get_dataloader(config):
     print(config['src_language'])
     print(config['tgt_language'])
     # dataset_raw = load_dataset('opus_books', f"{config['src_language']}-{config['tgt_language']}", split='train', streaming=True)
-    dataset_raw = load_dataset("opus_books", "en-fr", split='train', streaming=True)
-    for row in dataset_raw:
-        print(row)
+    # dataset_raw = load_dataset("opus_books", "en-fr", split='train', streaming=True)
+    dataset_raw = load_dataset('json', data_files='en-fr', split='train')
 
     # 2. We also need tokenizers, one for each raw dataset language subset.
     src_tokenizer = get_or_build_tokenizer(config, dataset_raw, config['src_language'])
@@ -173,7 +168,7 @@ def get_dataloader(config):
     # 3. We split here. Could also do this after we got our BilingualDataset objects.
     train_dataset_size = int(0.9 * len(dataset_raw))
     valid_dataset_size = len(dataset_raw) - train_dataset_size
-    train_dataset_raw, valid_dataset_raw = random.split(dataset_raw, [train_dataset_size, valid_dataset_size])
+    train_dataset_raw, valid_dataset_raw = random_split(dataset_raw, [train_dataset_size, valid_dataset_size])
     
     # 4. We need a seq_len for both the encoder and the decoder
     src_seq_len = 0
@@ -181,8 +176,10 @@ def get_dataloader(config):
     seq_len = 0
 
     for item in dataset_raw:
-        src_ids = src_tokenizer.encode(item['translation'][config.src_language]).ids
-        tgt_ids = src_tokenizer.encode(item['translation'][config.tgt_language]).ids
+        #src_ids = src_tokenizer.encode(item['translation'][config['src_language']]).ids
+        #tgt_ids = src_tokenizer.encode(item['translation'][config['tgt_language']]).ids
+        src_ids = src_tokenizer.encode(item[config['src_language']]).ids
+        tgt_ids = src_tokenizer.encode(item[config['tgt_language']]).ids
         src_seq_len = max(src_seq_len, len(src_ids))
         tgt_seq_len = max(tgt_seq_len, len(tgt_ids))
     #print(f'Maximum sequence length of tokenized source sentences is {src_seq_len}')
@@ -228,7 +225,7 @@ def train_model(config):
     writer = SummaryWriter(config['experiment_name'])    
     
     # Get our optimizer to update the weights.
-    optimizer = toch.optim.Adam(model.parameters(), lr=config['lr'], eps=1e-9)
+    optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'], eps=1e-9)
 
     # Create some resilience so that we don't have to start training from scratch if there is a crash during training.
     initial_epoch = 0
