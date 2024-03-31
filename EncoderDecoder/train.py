@@ -268,11 +268,11 @@ def train_model(config):
             # Now push the training data tensors through the transformer in 3 steps: encode, decode, project.
             # 1. Encode.
             # Dim of output is (batch_size, seq_len, embed_size).
-            encoder_output_tensor_batch = model.encode(encoder_input_tensor_batch, encoder_input_tensor_padding_mask_batch) 
+            encoder_output_tensor_batch = model.encode(encoder_input_tensor_batch, encoder_input_tensor_mask_batch) 
 
             # 2. Decode, using the output of the encoder that we got in the previous step.
             # Dim of output below is also (batch_size, seq_len, embed_size).
-            decoder_output_tensor_batch = model.decode(decoder_input_tensor_batch, decoder_input_tensor_causal_mask_batch, encoder_output_tensor_batch, encoder_input_tensor_padding_mask_batch )
+            decoder_output_tensor_batch = model.decode(decoder_input_tensor_batch, decoder_input_tensor_causal_mask_batch, encoder_output_tensor_batch, encoder_input_tensor_mask_batch )
 
             # 3. Project.
             # Dim of output below is (batch_size, seq_len, tgt_vocab_size).

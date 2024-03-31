@@ -102,8 +102,8 @@ class BilingualDataset(Dataset):
             #
             "decoder_input_tensor_mask": (decoder_input_tensor != self.pad_token).unsqueeze(0).unsqueeze(0).int() & causal_mask(decoder_input_tensor.size(0)), 
             "decoder_label_tensor": decoder_label_tensor, # dimension is seq_len
-            "src_txt": src_txt,
-            "tgt_txt": tgt_txt
+            "src_text": src_text,
+            "tgt_text": tgt_text
         }
 
 

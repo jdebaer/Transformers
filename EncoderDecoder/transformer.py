@@ -1,5 +1,7 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from math import sqrt
 
 ##########################
 ########## HEAD ##########
@@ -46,8 +48,8 @@ class Embeddings(nn.Module):
 
         # input_ids dim is (batch, seq_len).
 
-        assert seq_len == input_ids.size(1), "Sequence length must be the same as the size of dimension 1 in input_ids."
-        position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0) 		# Create a [1,seq_len] tensor containing 0,1,2,...
+        assert self.seq_len == input_ids.size(1), "Sequence length must be the same as the size of dimension 1 in input_ids."
+        position_ids = torch.arange(self.seq_len, dtype=torch.long).unsqueeze(0) 		# Create a [1,seq_len] tensor containing 0,1,2,...
         token_embeddings = self.token_embeddings(input_ids) 				# Some implementations add: "* math.sqrt(embed_size)".
         position_embeddings = self.position_embeddings(position_ids)
         embeddings = token_embeddings + position_embeddings				
@@ -153,7 +155,7 @@ class Encoder(nn.Module):
 
     def forward(self, input_ids, mask):								# This is the padding mask, no causal mask for encoder.
         
-        context_vectorized_embeddings = self.embeddings(input_ids, mask) 			# Output dim here is (batch, seq_len, embed_size).
+        context_vectorized_embeddings = self.embeddings(input_ids) 				# Output dim here is (batch, seq_len, embed_size).
         for encoder_block in self.EncoderBlocks:
             context_vectorized_embeddings = encoder_block(context_vectorized_embeddings, mask)	# Add more and more context.
 
@@ -262,7 +264,7 @@ class AttentionHead(nn.Module):
         # Note on the mask: this can be a combination of a causal mask and a padding mask (decoder) or a padding mask only (encoder).
 
         if self.type == 'self':
-            head_context_vector = scaled_dot_product_attention(
+            head_context_vector = self.scaled_dot_product_attention(
                 self.Wq(embedding),
                 self.Wk(embedding),
                 self.Wv(embedding),
@@ -270,7 +272,7 @@ class AttentionHead(nn.Module):
                 mask
             )
         else:
-            head_context_vector = scaled_dot_product_attention(
+            head_context_vector = self.scaled_dot_product_attention(
                 self.Wq(embedding),							# For cross attention we use the query from the decoder.
                 input_for_cross_attention, 						# Used for cross attention key.
                 input_for_cross_attention, 						# User for cross attention value.
@@ -280,17 +282,19 @@ class AttentionHead(nn.Module):
             
         return head_context_vector
 
-    def scaled_dot_product_attention(query, key, value, dropout: nn.Dropout, mask=None):
+    def scaled_dot_product_attention(self, query, key, value, dropout: nn.Dropout, mask=None):
 
         # The q/k/v inputs are expected to be tensors with 3 dimensions: [batch_size, seq_len, embed_size].
         # Example is [1, 5, 768] for sequences of length 5 with embeddings of size 768 -> 768 is reduced by W matrices as per the above.
         # Transpose (-2,-1) puts the key in format [1, 768, 5] so that when we do Q * K the result is [1, 5, 5] as we multiply the "deepest" matrix.
-        # This essentially is the "resonance" of each word with each other word.
+        # This essentially is the "resonance" of each word with each other word, attention_scores, with dim (batch_size, seq_len, seq_len).
         # When then multiply each softmaxed attention weight with the corresponding value, [1, 5, 5] * [1, 5, <val size>] to go to [1, 5, <val size>] (returned).
         # Note that in our implementation <val size> will be 5 as well, although technically is does not have to be.
 
         dim_of_key = key.size(-1)							# Can use dim of query as well, have to be the same.
         attention_scores = torch.bmm(query, key.transpose(-2,-1))/sqrt(dim_of_key)	# Normalized dot product.
+        print(attention_scores.size())
+        print(mask.size())
 
         if mask is not None:
             # Softmax has e ** x in the numerator, and e ** -inf == 0. Having 0 as the attention score is our objective with the causal mask.
@@ -314,12 +318,18 @@ class AttentionHead(nn.Module):
             # 4,5,6 -> masked_fill([[[1,1,0]]]) -> 4,5,-inf
             # 7,8,9                                7,8,-inf
             #
+        print(attention_scores.size())
+        attention_weights = F.softmax(attention_scores, dim = -1)
+        print(attention_weights.size())
+        exit(0)
 
-        attention_weights = attention_scores.softmax(dim = -1)
         if dropout is not None:
            attention_weights = dropout(attention_weights)
-        # return attention_weights.bmm(value), attention_weights			# To do: incorporate attention_weights for visualization.
-        return attention_weights.bmm(value)						# Attention weights * values == head context vector.
+        ## return attention_weights.bmm(value), attention_weights			# To do: incorporate attention_weights for visualization.
+        #return attention_weights.bmm(value)						# Attention weights * values == head context vector.
+        print(attention_weights.size())
+        print(value.size())
+        return torch.bmm(attention_weights, value)
 
 def build_transformer(config, encoder_vocab_size, decoder_vocab_size, encoder_seq_len, decoder_seq_len) -> Transformer:
 
