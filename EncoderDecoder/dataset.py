@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
+import numpy
 
 class BilingualDataset(Dataset):
 
@@ -84,11 +85,16 @@ class BilingualDataset(Dataset):
         assert decoder_input_tensor.size(0) == self.seq_len, "Decoder input tensor does not have size seq_len."
         assert decoder_label_tensor.size(0) == self.seq_len, "Decoder label tensor does not have size seq_len."
 
+        #encoder_input_tensor_mask = (encoder_input_tensor != self.pad_token).unsqueeze(0).unsqueeze(0).int() # dimension is (1,1,seq_len)
+        encoder_input_tensor_mask = (encoder_input_tensor != self.pad_token).unsqueeze(0).int() # dimension is (1,1,seq_len)
+        #decoder_input_tensor_mask = (decoder_input_tensor != self.pad_token).unsqueeze(0).unsqueeze(0).int() & causal_mask(decoder_input_tensor.size(0))
+        decoder_input_tensor_mask = (decoder_input_tensor != self.pad_token).unsqueeze(0).int() & causal_mask(decoder_input_tensor.size(0))
+
         return {
             "encoder_input_tensor": encoder_input_tensor, # dimension is seq_len
             "decoder_input_tensor": decoder_input_tensor, # dimension is seq_len
             # Padding mask is the same for each row in the final matrix of the dot product.
-            "encoder_input_tensor_mask": (encoder_input_tensor != self.pad_token).unsqueeze(0).unsqueeze(0).int(), # dimension is (1,1,seq_len)  
+            "encoder_input_tensor_mask": encoder_input_tensor_mask, # dimension is (1,1,seq_len)  
             # Causal mask is diagonal. We also want to ignore the paddings in the decoder though.
             # Dimensions are (1,1,seq_len) and (1,seq_len,seq_len) respectively.
             # 
@@ -100,7 +106,7 @@ class BilingualDataset(Dataset):
             #                               1,1,1,0                          1,1,1,0
             #                               1,1,1,1                          1,1,1,0 <<< column 4 is set to zeros as these are padding tokens
             #
-            "decoder_input_tensor_mask": (decoder_input_tensor != self.pad_token).unsqueeze(0).unsqueeze(0).int() & causal_mask(decoder_input_tensor.size(0)), 
+            "decoder_input_tensor_mask": decoder_input_tensor_mask,
             "decoder_label_tensor": decoder_label_tensor, # dimension is seq_len
             "src_text": src_text,
             "tgt_text": tgt_text
@@ -109,7 +115,8 @@ class BilingualDataset(Dataset):
 
 def causal_mask(dim):
   
-    mask = torch.triu(torch.ones(1, dim, dim), diagonal=1).type(torch.int) # This one has zero diag and zeroes below, we need opposite hence:
+    #mask = torch.triu(torch.ones(1, dim, dim), diagonal=1).type(torch.int) # This one has zero diag and zeroes below, we need opposite hence:
+    mask = torch.triu(torch.ones(dim, dim), diagonal=1).type(torch.int) # This one has zero diag and zeroes below, we need opposite hence:
     return (mask == 0).int()
 
  

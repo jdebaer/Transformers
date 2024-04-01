@@ -61,18 +61,20 @@ class Transformer(nn.Module):
 
     def __init__(self, config, encoder_vocab_size, decoder_vocab_size, encoder_seq_len, decoder_seq_len):
         super().__init__()
-        
+
+        self.encoder_embeddings = Embeddings(config, encoder_vocab_size, encoder_seq_len)	# This will be src_vocab_size and scr_seq_len, since encoder.
+        self.decoder_embeddings = Embeddings(config, decoder_vocab_size, decoder_seq_len)	# This will be src_vocab_size and scr_seq_len, since encoder.
         self.encoder = Encoder(config, encoder_vocab_size, encoder_seq_len)
         self.decoder = Decoder(config, decoder_vocab_size, decoder_seq_len)
         self.projection_layer = ProjectionLayer(config, decoder_vocab_size)
 
     def encode(self, encoder_input_ids, encoder_mask): 					# At this point dim is (batch, seq_len).
         
-        return self.encoder(encoder_input_ids, encoder_mask)
+        return self.encoder(encoder_input_ids, encoder_mask, self.encoder_embeddings)
 
     def decode(self, decoder_input_ids, decoder_mask, encoder_output, encoder_mask):	# At this point dim is (batch, seq_len).	
 
-        return self.decoder(decoder_input_ids, decoder_mask, encoder_output, encoder_mask)
+        return self.decoder(decoder_input_ids, decoder_mask, encoder_output, encoder_mask, self.decoder_embeddings)
 
     def project(self, decoder_output):
        
@@ -100,15 +102,17 @@ class Decoder(nn.Module):
     def __init__(self, config, vocab_size, seq_len):						# We calculate seq_len, so it's not part of config.
         super().__init__()
 
-        self.embeddings = Embeddings(config, vocab_size, seq_len)				# This will be src_vocab_size and scr_seq_len, since encoder.
         self.layer_norm = nn.LayerNorm(config['embed_size'])
         self.DecoderBlocks = nn.ModuleList(
            [DecoderBlock(config) for _ in range(config['num_decoderblocks'])] 
         )
 
-    def forward(self, input_ids, decoder_mask, encoder_output, encoder_mask):			# Encoder_mask is padding, decoder_mask is padding and causal.
+    def forward(self, input_ids, decoder_mask, encoder_output, encoder_mask, embeddings):	# Encoder_mask is padding, decoder_mask is padding and causal.
         
-        context_vectorized_embeddings = self.embeddings(input_ids) 
+        print("xxxxxxxxxx")
+        print(len(input_ids))
+        print("xxxxxxxxxx")
+        context_vectorized_embeddings = embeddings(input_ids) 
         for decoder_block in self.DecoderBlocks:
             context_vectorized_embeddings = decoder_block(context_vectorized_embeddings, decoder_mask, encoder_output, encoder_mask)
 
@@ -147,15 +151,17 @@ class Encoder(nn.Module):
     def __init__(self, config, vocab_size, seq_len):						# We calculate seq_len, so it's not part of config.
         super().__init__()
 
-        self.embeddings = Embeddings(config, vocab_size, seq_len)				# This will be src_vocab_size and scr_seq_len, since encoder.
         self.layer_norm = nn.LayerNorm(config['embed_size'])
         self.EncoderBlocks = nn.ModuleList(
            [EncoderBlock(config) for _ in range(config['num_encoderblocks'])] 
         )
 
-    def forward(self, input_ids, mask):								# This is the padding mask, no causal mask for encoder.
+    def forward(self, input_ids, mask, embeddings):						# This is the padding mask, no causal mask for encoder.
         
-        context_vectorized_embeddings = self.embeddings(input_ids) 				# Output dim here is (batch, seq_len, embed_size).
+        print("xxxxxxxxxx")
+        print(len(input_ids))
+        print("xxxxxxxxxx")
+        context_vectorized_embeddings = embeddings(input_ids) 					# Output dim here is (batch, seq_len, embed_size).
         for encoder_block in self.EncoderBlocks:
             context_vectorized_embeddings = encoder_block(context_vectorized_embeddings, mask)	# Add more and more context.
 
@@ -276,7 +282,7 @@ class AttentionHead(nn.Module):
                 self.Wq(embedding),							# For cross attention we use the query from the decoder.
                 input_for_cross_attention, 						# Used for cross attention key.
                 input_for_cross_attention, 						# User for cross attention value.
-                self.drouput,
+                self.dropout,
                 mask
             )
             
@@ -293,12 +299,19 @@ class AttentionHead(nn.Module):
 
         dim_of_key = key.size(-1)							# Can use dim of query as well, have to be the same.
         attention_scores = torch.bmm(query, key.transpose(-2,-1))/sqrt(dim_of_key)	# Normalized dot product.
+        print("----------------------------")
+        print("attention_scores:")
         print(attention_scores.size())
-        print(mask.size())
+        #print(attention_scores)
 
         if mask is not None:
+            print("mask:")
+            print(mask.size())
             # Softmax has e ** x in the numerator, and e ** -inf == 0. Having 0 as the attention score is our objective with the causal mask.
             attention_scores = attention_scores.masked_fill(mask == 0, float("-inf"))
+            print("attention_scores after masking:")
+            print(attention_scores.size())
+            #print(attention_scores)
 
             # Note to understand how the mask is used with the dot product (skipping the normalization here):
             # When we multiply query with key, we essentially measure the resonance of every word with every word in the sequence.
@@ -318,17 +331,21 @@ class AttentionHead(nn.Module):
             # 4,5,6 -> masked_fill([[[1,1,0]]]) -> 4,5,-inf
             # 7,8,9                                7,8,-inf
             #
-        print(attention_scores.size())
         attention_weights = F.softmax(attention_scores, dim = -1)
+        print("attention_weights:")
         print(attention_weights.size())
-        exit(0)
+        #print(attention_weights)
 
         if dropout is not None:
            attention_weights = dropout(attention_weights)
         ## return attention_weights.bmm(value), attention_weights			# To do: incorporate attention_weights for visualization.
         #return attention_weights.bmm(value)						# Attention weights * values == head context vector.
+        print("attention_weights:")
         print(attention_weights.size())
+        #print(attention_weights)
+        print("value:")
         print(value.size())
+        #print(value)
         return torch.bmm(attention_weights, value)
 
 def build_transformer(config, encoder_vocab_size, decoder_vocab_size, encoder_seq_len, decoder_seq_len) -> Transformer:

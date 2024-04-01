@@ -3,13 +3,13 @@ from pathlib import Path
 def get_config():
     return {
         'batch_size': 10,
-        'num_epochs': 20,
+        'num_epochs': 1,
         'lr': 10**-4,
-        'embed_size': 16,
+        'embed_size': 3,
         'ff_intermediate_size': 32,
         'num_encoderblocks': 1,
         'num_decoderblocks': 1,
-        'num_attention_heads': 4,
+        'num_attention_heads': 1,
         'src_language': 'en',
         'tgt_language': 'fr',
         'model_folder': 'weights',

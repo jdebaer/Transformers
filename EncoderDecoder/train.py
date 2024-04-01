@@ -184,8 +184,8 @@ def get_dataloader(config):
         tgt_seq_len = max(tgt_seq_len, len(tgt_ids))
     #print(f'Maximum sequence length of tokenized source sentences is {src_seq_len}')
     #print(f'Maximum sequence length of tokenized target sentences is {tgt_seq_len}')
-    # For now we use the maximum of the two as our joint seq_len.
-    seq_len = max(src_seq_len, tgt_seq_len)
+    # For now we use the maximum of the two + 2 as our joint seq_len. We do +2 because we're going to add up to 2 special tokens.
+    seq_len = max(src_seq_len, tgt_seq_len) + 2
     print(f'We use sequence length {seq_len}')
     
 
@@ -245,7 +245,7 @@ def train_model(config):
     # We can use either tokenizer to find the input id for '[PAD]'.
     # The label smoothing here takes 0.1% of the highest score and distributes it over the others - this makes the model more accurate.
     # To do: implement your own CEL: https://discuss.pytorch.org/t/cross-entropy-loss-clarification/103830/2.
-    loss_function = nn.CrossEntropyLoss(ignore_index=src_tokenizer.token_to_id('[PAD]'), label_smoothing=0.1).to(device)    
+    loss_fn = nn.CrossEntropyLoss(ignore_index=src_tokenizer.token_to_id('[PAD]'), label_smoothing=0.1).to(device)    
 
     for epoch in range(initial_epoch, config['num_epochs']):
 
@@ -272,7 +272,7 @@ def train_model(config):
 
             # 2. Decode, using the output of the encoder that we got in the previous step.
             # Dim of output below is also (batch_size, seq_len, embed_size).
-            decoder_output_tensor_batch = model.decode(decoder_input_tensor_batch, decoder_input_tensor_causal_mask_batch, encoder_output_tensor_batch, encoder_input_tensor_mask_batch )
+            decoder_output_tensor_batch = model.decode(decoder_input_tensor_batch, decoder_input_tensor_mask_batch, encoder_output_tensor_batch, encoder_input_tensor_mask_batch )
 
             # 3. Project.
             # Dim of output below is (batch_size, seq_len, tgt_vocab_size).
@@ -284,10 +284,10 @@ def train_model(config):
             # To do first: print out what we get here, we should be comparing input ids with input ids.
             # To do second: nn.CEL seems to already apply log_softmax itself and it seems to be recommended to NOT feed it already softmax-ed input
             # but the latter is what we are doing.
-            loss = loss_fn(transformer_output_tensor_batch.view(-1, tgt_tokenizer.get_vocab_size()), label.view(-1))
+            loss = loss_fn(transformer_output_tensor_batch.view(-1, tgt_tokenizer.get_vocab_size()), decoder_label_tensor_batch.view(-1))
 
             batch_iterator.set_postfix({f"loss": f"{loss.item():6.3f}"}) 					# Show loss on the tqdm progress bar.
-            writer.add_scaler('train_loss', loss.item(), global_step) 						# This is for TensorBoard, still needs work.
+            writer.add_scalar('train_loss', loss.item(), global_step) 						# This is for TensorBoard, still needs work.
             writer.flush()											# This is for TensorBoard, still needs work.	
 
             # Backpropagate the loss.
