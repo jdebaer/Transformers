@@ -73,7 +73,11 @@ def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_b
 
     return decoder_input_tensor_batch.squeeze(0) # Remove the batch dimension so we end up with a tensor containing one dimension of ids.
 
-def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, print_msg, global_state, writer, num_examples=2):
+def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, print_msg, global_state, writer, num_examples=1):
+
+    print("-------------------------------------------")
+    print("Running validation")
+    print("-------------------------------------------")
 
     # Currently this is a PoC validation, where we print out the target sentence as well as the predicted sentence.
 
@@ -99,6 +103,9 @@ def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_le
             # The output is a (batch_size, seq_len) (or shorter than seq_len) where the last element in dim seq_len is '[EOS]'.
             # transformer_infer only has one dimension, the size of which is the amount of generated ids.
             transformer_infer = greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_batch, src_tokenizer, tgt_tokenizer, seq_len, device)
+            print("*********** Inferred ids ***********")
+            print(transformer_infer)
+            print("************************************")
 
             src_sentence = batch['src_text'][0]
             tgt_sentence = batch['tgt_text'][0]
@@ -195,6 +202,7 @@ def get_dataloader(config):
 
     # Now we wrap these __get_item()__ Datasets in DataLoaders so that we get batches.
 
+    # Remember to turn shuffle back on after debugging.
     train_dataloader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True)
     valid_dataloader = DataLoader(valid_dataset, batch_size=1, shuffle=True) # For validation we're doing one by one for now.
 
@@ -298,9 +306,11 @@ def train_model(config):
             optimizer.zero_grad() 										# Zero out the gradient.
 
 
-            run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, lambda msg: batch_iterator.write(msg), global_step, writer)
+            # run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, lambda msg: batch_iterator.write(msg), global_step, writer)
 
             global_step += 1 											# Used by TensorBoard to keep track of the loss.
+
+            break # REMOVE THIS - temporary in order to just train with one batch containing one sample.
 
         # Put run_validate here to run validation after every epoch - move model.train() accordingly.
 

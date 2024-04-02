@@ -33,6 +33,7 @@ class Embeddings(nn.Module):
 
     # An Embeddings maps each input id to a vector of size embed_size which contains token and position embeddings.
     # For an Encoder-Decoder we'll need two Embedddings, each with their own vocab size and possible also a different seq_len.
+    # Note: what gets pushed through these Embeddings are the batched training samples, delivered by our dataloaders.
 
     def __init__(self, config, vocab_size, seq_len):
         super().__init__()
@@ -47,12 +48,16 @@ class Embeddings(nn.Module):
     def forward(self, input_ids):
 
         # input_ids dim is (batch, seq_len).
-
-        assert self.seq_len == input_ids.size(1), "Sequence length must be the same as the size of dimension 1 in input_ids."
-        position_ids = torch.arange(self.seq_len, dtype=torch.long).unsqueeze(0) 		# Create a [1,seq_len] tensor containing 0,1,2,...
+        # Note: during training, seq_len and the length of input_ids is the same, since we padding input_ids to reach seq_len.
+        #       However, during validation, seq_len and length of input_ids will mostly differ, since for input_ids we're starting with just 1 id.
+        if self.training:
+              assert self.seq_len == input_ids.size(1), "During training, seq_len must match sequence dimension of input_ids."
+        
+        #position_ids = torch.arange(self.seq_len, dtype=torch.long).unsqueeze(0) 		# Create a [1,seq_len] tensor containing 0,1,2,...
+        position_ids = torch.arange(input_ids.size(1), dtype=torch.long).unsqueeze(0) 		# Create a [1,seq_len] tensor containing 0,1,2,...
         token_embeddings = self.token_embeddings(input_ids) 				# Some implementations add: "* math.sqrt(embed_size)".
         position_embeddings = self.position_embeddings(position_ids)
-        embeddings = token_embeddings + position_embeddings				
+        embeddings = token_embeddings + position_embeddings				# (batch_size, seq_len, embed_size) + (1, seq_len, embed_size)		
         embeddings = self.layer_norm(embeddings) 
         embeddings = self.dropout(embeddings) 
         return embeddings								# Dim is (batch, seq_len, embed_size). 
@@ -109,9 +114,6 @@ class Decoder(nn.Module):
 
     def forward(self, input_ids, decoder_mask, encoder_output, encoder_mask, embeddings):	# Encoder_mask is padding, decoder_mask is padding and causal.
         
-        print("xxxxxxxxxx")
-        print(len(input_ids))
-        print("xxxxxxxxxx")
         context_vectorized_embeddings = embeddings(input_ids) 
         for decoder_block in self.DecoderBlocks:
             context_vectorized_embeddings = decoder_block(context_vectorized_embeddings, decoder_mask, encoder_output, encoder_mask)
@@ -137,10 +139,10 @@ class DecoderBlock(nn.Module):
         
         norm_embedding = self.layer_norm_1(embedding)
         # self_multihead_context_vector_skip is what you add to the upcoming skip connection.
-        self_multihead_context_vector_skip = embedding + self.self_multi_head_attention(norm_embedding, decoder_mask)
+        self_multihead_context_vector_skip = embedding + self.self_multi_head_attention(norm_embedding, decoder_mask, caller='decoder')
         norm_self_multihead_context_vector_skip = self.layer_norm_2(self_multihead_context_vector_skip)
         # cross_multihead_context_vector_skip is what you add to the upcoming skip connection.
-        cross_multihead_context_vector_skip = self_multihead_context_vector_skip + self.cross_multi_head_attention(norm_self_multihead_context_vector_skip, encoder_mask, encoder_output) 
+        cross_multihead_context_vector_skip = self_multihead_context_vector_skip + self.cross_multi_head_attention(norm_self_multihead_context_vector_skip, encoder_mask, encoder_output, caller='decoder') 
         norm_cross_multihead_context_vector_skip = self.layer_norm_3(cross_multihead_context_vector_skip)
         encoder_block_context_vector = cross_multihead_context_vector_skip + self.feed_forward(norm_cross_multihead_context_vector_skip)
         # Return is not layer-normalized.
@@ -158,9 +160,6 @@ class Encoder(nn.Module):
 
     def forward(self, input_ids, mask, embeddings):						# This is the padding mask, no causal mask for encoder.
         
-        print("xxxxxxxxxx")
-        print(len(input_ids))
-        print("xxxxxxxxxx")
         context_vectorized_embeddings = embeddings(input_ids) 					# Output dim here is (batch, seq_len, embed_size).
         for encoder_block in self.EncoderBlocks:
             context_vectorized_embeddings = encoder_block(context_vectorized_embeddings, mask)	# Add more and more context.
@@ -177,13 +176,13 @@ class EncoderBlock(nn.Module):
 
         self.layer_norm_1 = nn.LayerNorm(config['embed_size'])
         self.layer_norm_2 = nn.LayerNorm(config['embed_size'])
-        self.self_multi_head_attention = MultiHeadAttention(config, 'self')			# Encoders use self attention.
+        self.self_multi_head_attention = MultiHeadAttention(config, 'self')	# Encoders use self attention.
         self.feed_forward = FeedForward(config)
 
     def forward(self, embedding, mask):							# This is the padding mask, no causal mask for encoder.
   
         norm_embedding = self.layer_norm_1(embedding)					# We are doing pre-layer normalization.
-        multihead_context_vector_skip = embedding + self.self_multi_head_attention(norm_embedding, mask)
+        multihead_context_vector_skip = embedding + self.self_multi_head_attention(norm_embedding, mask, caller='encoder')
         norm_multihead_context_vector_skip = self.layer_norm_2(multihead_context_vector_skip)
         encoder_block_context_vector = multihead_context_vector_skip + self.feed_forward(norm_multihead_context_vector_skip)
         # Return is not layer-normalized.
@@ -221,6 +220,8 @@ class MultiHeadAttention(nn.Module):
         num_attention_heads = config['num_attention_heads']
         attention_head_input_dim = embed_size
         attention_head_output_dim = embed_size // num_attention_heads
+        print(attention_head_input_dim)
+        print(attention_head_output_dim)
         assert embed_size % num_attention_heads == 0, "Embedding size must be divisible by number of heads" 
         self.attention_heads = nn.ModuleList(
             [AttentionHead(config, attention_head_input_dim, attention_head_output_dim, type) for _ in range(num_attention_heads)]
@@ -228,16 +229,16 @@ class MultiHeadAttention(nn.Module):
         # What we feed to Wo are the concatenated head context vectors. This concatenation will have the embedding size again.
         self.Wo = nn.Linear(embed_size, embed_size)						
 
-    def forward(self, embedding, mask, encoder_output=None):
+    def forward(self, embedding, mask, encoder_output=None, caller=None):
     
         # Note on the mask: this can be a combination of a causal mask and a padding mask (decoder) or a padding mask only (encoder).
         if self.type == 'self':										# Self attention mode.
             concatenated_head_context_vectors = torch.cat(
-               [attention_head(embedding, mask) for attention_head in self.attention_heads], dim=-1 
+               [attention_head(embedding, mask, caller=caller) for attention_head in self.attention_heads], dim=-1 
             )
         else:												# Cross attention mode.
             concatenated_head_context_vectors = torch.cat(
-               [attention_head(embedding, mask, encoder_output) for attention_head in self.attention_heads], dim=-1 
+               [attention_head(embedding, mask, encoder_output, caller=caller) for attention_head in self.attention_heads], dim=-1 
             )
         assert concatenated_head_context_vectors.size(-1) == embedding.size(-1), "Concatenated head context vectors size must match embedding size."        
         multihead_context_vector = self.Wo(concatenated_head_context_vectors)
@@ -265,7 +266,7 @@ class AttentionHead(nn.Module):
             self.Wv = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
         self.dropout = nn.Dropout(config['dropout_prob'])
 
-    def forward(self, embedding, mask, input_for_cross_attention=None): 
+    def forward(self, embedding, mask, input_for_cross_attention=None, caller=None): 
 
         # Note on the mask: this can be a combination of a causal mask and a padding mask (decoder) or a padding mask only (encoder).
 
@@ -275,7 +276,9 @@ class AttentionHead(nn.Module):
                 self.Wk(embedding),
                 self.Wv(embedding),
                 self.dropout,
-                mask
+                mask,
+                self.type,
+                caller
             )
         else:
             head_context_vector = self.scaled_dot_product_attention(
@@ -283,12 +286,14 @@ class AttentionHead(nn.Module):
                 input_for_cross_attention, 						# Used for cross attention key.
                 input_for_cross_attention, 						# User for cross attention value.
                 self.dropout,
-                mask
+                mask,
+                self.type,
+                caller
             )
             
         return head_context_vector
 
-    def scaled_dot_product_attention(self, query, key, value, dropout: nn.Dropout, mask=None):
+    def scaled_dot_product_attention(self, query, key, value, dropout: nn.Dropout, mask=None, type=None, caller=None):
 
         # The q/k/v inputs are expected to be tensors with 3 dimensions: [batch_size, seq_len, embed_size].
         # Example is [1, 5, 768] for sequences of length 5 with embeddings of size 768 -> 768 is reduced by W matrices as per the above.
@@ -297,21 +302,31 @@ class AttentionHead(nn.Module):
         # When then multiply each softmaxed attention weight with the corresponding value, [1, 5, 5] * [1, 5, <val size>] to go to [1, 5, <val size>] (returned).
         # Note that in our implementation <val size> will be 5 as well, although technically is does not have to be.
 
+        print("----------------------------")
+        print(caller)
+        print(type)
+        print("query:")
+        print(query.size())
+        print(query)
+        print("key:")
+        print(key.size())
+        print(key)
+
         dim_of_key = key.size(-1)							# Can use dim of query as well, have to be the same.
         attention_scores = torch.bmm(query, key.transpose(-2,-1))/sqrt(dim_of_key)	# Normalized dot product.
-        print("----------------------------")
         print("attention_scores:")
         print(attention_scores.size())
-        #print(attention_scores)
+        print(attention_scores)
 
         if mask is not None:
             print("mask:")
             print(mask.size())
+            print(mask)
             # Softmax has e ** x in the numerator, and e ** -inf == 0. Having 0 as the attention score is our objective with the causal mask.
             attention_scores = attention_scores.masked_fill(mask == 0, float("-inf"))
             print("attention_scores after masking:")
             print(attention_scores.size())
-            #print(attention_scores)
+            print(attention_scores)
 
             # Note to understand how the mask is used with the dot product (skipping the normalization here):
             # When we multiply query with key, we essentially measure the resonance of every word with every word in the sequence.
@@ -334,19 +349,22 @@ class AttentionHead(nn.Module):
         attention_weights = F.softmax(attention_scores, dim = -1)
         print("attention_weights:")
         print(attention_weights.size())
-        #print(attention_weights)
+        print(attention_weights)
 
-        if dropout is not None:
-           attention_weights = dropout(attention_weights)
+        # To do: restore dropout after debugging.
+        #if dropout is not None:
+        #   attention_weights = dropout(attention_weights)
+
         ## return attention_weights.bmm(value), attention_weights			# To do: incorporate attention_weights for visualization.
         #return attention_weights.bmm(value)						# Attention weights * values == head context vector.
-        print("attention_weights:")
-        print(attention_weights.size())
-        #print(attention_weights)
         print("value:")
         print(value.size())
-        #print(value)
-        return torch.bmm(attention_weights, value)
+        print(value)
+        head_context_vector = torch.bmm(attention_weights, value)
+        print("head_context_vector:")
+        print(head_context_vector.size())
+        print(head_context_vector)
+        return head_context_vector
 
 def build_transformer(config, encoder_vocab_size, decoder_vocab_size, encoder_seq_len, decoder_seq_len) -> Transformer:
 
