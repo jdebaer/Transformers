@@ -192,7 +192,8 @@ def get_dataloader(config):
     #print(f'Maximum sequence length of tokenized source sentences is {src_seq_len}')
     #print(f'Maximum sequence length of tokenized target sentences is {tgt_seq_len}')
     # For now we use the maximum of the two + 2 as our joint seq_len. We do +2 because we're going to add up to 2 special tokens.
-    seq_len = max(src_seq_len, tgt_seq_len) + 2
+    # Note: technically +2 is enough, but we do +5 to get some more padding tokens during our testing.
+    seq_len = max(src_seq_len, tgt_seq_len) + 5
     print(f'We use sequence length {seq_len}')
     
 
@@ -292,6 +293,11 @@ def train_model(config):
             # To do first: print out what we get here, we should be comparing input ids with input ids.
             # To do second: nn.CEL seems to already apply log_softmax itself and it seems to be recommended to NOT feed it already softmax-ed input
             # but the latter is what we are doing.
+            print(" ------- cross entropy -------")
+            print(transformer_output_tensor_batch.view(-1, tgt_tokenizer.get_vocab_size()))
+            print(decoder_label_tensor_batch.view(-1))
+            # Use: https://discuss.huggingface.co/t/token-probabilities-dont-agree-with-the-output-loss/25960 
+            print(" -----------------------------")
             loss = loss_fn(transformer_output_tensor_batch.view(-1, tgt_tokenizer.get_vocab_size()), decoder_label_tensor_batch.view(-1))
 
             batch_iterator.set_postfix({f"loss": f"{loss.item():6.3f}"}) 					# Show loss on the tqdm progress bar.

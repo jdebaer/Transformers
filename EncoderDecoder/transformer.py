@@ -100,6 +100,14 @@ class ProjectionLayer(nn.Module):
         # At each position in the seq_len dimension, we have an embedding that contains context both from encoder and decoder now, and that only
         # looked at itself + previous tokens/ids for the decoder self-attention. Each of these embeddings is now asked to predict the next word in
         # parallel. This is what happens during training. This is then compared with the shifted tokens/ids in the label.
+        
+        print("oooooooooooooooooooooooooooooooooooooo")
+        print(torch.log_softmax(self.proj(decoder_output), dim = -1).size())
+        print(torch.argmax(torch.log_softmax(self.proj(decoder_output), dim = -1), dim = -1).size())
+        print(torch.argmax(torch.log_softmax(self.proj(decoder_output), dim = -1), dim = -1))
+        print("oooooooooooooooooooooooooooooooooooooo")
+
+
         return torch.log_softmax(self.proj(decoder_output), dim = -1)				# log_softmax for more training stability.:
 
 class Decoder(nn.Module):
@@ -159,7 +167,7 @@ class Encoder(nn.Module):
         )
 
     def forward(self, input_ids, mask, embeddings):						# This is the padding mask, no causal mask for encoder.
-        
+
         context_vectorized_embeddings = embeddings(input_ids) 					# Output dim here is (batch, seq_len, embed_size).
         for encoder_block in self.EncoderBlocks:
             context_vectorized_embeddings = encoder_block(context_vectorized_embeddings, mask)	# Add more and more context.
@@ -311,6 +319,8 @@ class AttentionHead(nn.Module):
         print("key:")
         print(key.size())
         print(key)
+        print("key transposed:")
+        print(key.transpose(-2,-1))
 
         dim_of_key = key.size(-1)							# Can use dim of query as well, have to be the same.
         attention_scores = torch.bmm(query, key.transpose(-2,-1))/sqrt(dim_of_key)	# Normalized dot product.
@@ -364,6 +374,7 @@ class AttentionHead(nn.Module):
         print("head_context_vector:")
         print(head_context_vector.size())
         print(head_context_vector)
+
         return head_context_vector
 
 def build_transformer(config, encoder_vocab_size, decoder_vocab_size, encoder_seq_len, decoder_seq_len) -> Transformer:
