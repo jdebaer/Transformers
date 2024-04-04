@@ -162,11 +162,12 @@ def get_dataloader(config):
     # This function eventually wants to set up BilingualDataset objects. Let's first stage all we need for that.
     
     # 1. We need the raw dataset. We use load_dataset from Hugging Face's datasets for that.
-    print(config['src_language'])
-    print(config['tgt_language'])
+    if config['debug']:
+        print(config['src_language'])
+        print(config['tgt_language'])
     # dataset_raw = load_dataset('opus_books', f"{config['src_language']}-{config['tgt_language']}", split='train', streaming=True)
     # dataset_raw = load_dataset("opus_books", "en-fr", split='train', streaming=True)
-    dataset_raw = load_dataset('json', data_files='en-fr', split='train')
+    dataset_raw = load_dataset('json', data_files='en-fr.tiny', split='train')
 
     # 2. We also need tokenizers, one for each raw dataset language subset.
     src_tokenizer = get_or_build_tokenizer(config, dataset_raw, config['src_language'])
@@ -192,9 +193,9 @@ def get_dataloader(config):
     #print(f'Maximum sequence length of tokenized source sentences is {src_seq_len}')
     #print(f'Maximum sequence length of tokenized target sentences is {tgt_seq_len}')
     # For now we use the maximum of the two + 2 as our joint seq_len. We do +2 because we're going to add up to 2 special tokens.
-    # Note: technically +2 is enough, but we do +5 to get some more padding tokens during our testing.
-    seq_len = max(src_seq_len, tgt_seq_len) + 5
-    print(f'We use sequence length {seq_len}')
+    seq_len = max(src_seq_len, tgt_seq_len) + 2
+    if config['debug']:
+        print(f'We use sequence length {seq_len}')
     
 
     # Now we can create our BilinguaDataset objects. To do: rewrite so that we can use the right seq_len for encoder and decoder.
@@ -203,7 +204,6 @@ def get_dataloader(config):
 
     # Now we wrap these __get_item()__ Datasets in DataLoaders so that we get batches.
 
-    # Remember to turn shuffle back on after debugging.
     train_dataloader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True)
     valid_dataloader = DataLoader(valid_dataset, batch_size=1, shuffle=True) # For validation we're doing one by one for now.
 
@@ -254,6 +254,7 @@ def train_model(config):
     # We can use either tokenizer to find the input id for '[PAD]'.
     # The label smoothing here takes 0.1% of the highest score and distributes it over the others - this makes the model more accurate.
     # To do: implement your own CEL: https://discuss.pytorch.org/t/cross-entropy-loss-clarification/103830/2.
+    # Use: https://discuss.huggingface.co/t/token-probabilities-dont-agree-with-the-output-loss/25960 
     loss_fn = nn.CrossEntropyLoss(ignore_index=src_tokenizer.token_to_id('[PAD]'), label_smoothing=0.1).to(device)    
 
     for epoch in range(initial_epoch, config['num_epochs']):
@@ -290,14 +291,42 @@ def train_model(config):
             # Now let's compare these batched predictions with our batched labels.
             # First view transforms (batch_size, seq_len, tgt_vocab_size) to (batch_size * seq_len, tgt_vocab_size)
             # label.view(-1) flattens out the complete batch over all seq_lens, so to batch_size * seq_len
-            # To do first: print out what we get here, we should be comparing input ids with input ids.
-            # To do second: nn.CEL seems to already apply log_softmax itself and it seems to be recommended to NOT feed it already softmax-ed input
-            # but the latter is what we are doing.
-            print(" ------- cross entropy -------")
-            print(transformer_output_tensor_batch.view(-1, tgt_tokenizer.get_vocab_size()))
-            print(decoder_label_tensor_batch.view(-1))
-            # Use: https://discuss.huggingface.co/t/token-probabilities-dont-agree-with-the-output-loss/25960 
-            print(" -----------------------------")
+            if config['debug']:
+                print(" ------- cross entropy -------")
+                print("encoder_input_tensor_batch:")
+                print(encoder_input_tensor_batch)
+                print("decoder_input_tensor_batch:")
+                print(decoder_input_tensor_batch)
+                print("decoder_label_tensor_batch.view(-1):")
+                print(decoder_label_tensor_batch.view(-1))
+                print("")
+                print("Logits return by projection layer:")
+                print(transformer_output_tensor_batch.view(-1, tgt_tokenizer.get_vocab_size()))
+                print(" -----------------------------")
+
+            # Notes on how cross entropy loss function works here:
+            # When 'debug' is on and when using 'en-fr.tiny', we can nicely inspect what's happening here.
+
+            # encoder_input_tensor_batch: (en)
+            # tensor([[ 2,  4, 10,  9,  3]]) -> [SOS] I am Chloe [EOS]
+            # decoder_input_tensor_batch: (fr)
+            # tensor([[ 2,  4, 12,  7,  1]]) -> [SOS] Je suis Chloe [PAD]
+            # decoder_label_tensor_batch.view(-1): (fr)
+            # tensor([ 4, 12,  7,  3,  1]) -> Je suis Chloe [EOS] [PAD] (label is same as input but shifted one -> )
+            #
+            # Logits return by projection layer:
+            # tensor([[-3.1357, -2.7117, -2.7288, -2.1729, -2.0720, -2.4078, -3.2586, -2.9551, -2.6074, -2.2920, -2.0198, -2.7384, -3.4311],
+            # <there are seq_len elements in this dimension, one for each token to be predicted>]], grad_fn=<ViewBackward0>)
+            #
+            # The tensor above, returned by the projection layer, contains 12 'log_softmaxed probabilities' per token to be predicted, where
+            # 12 corresponds to vocab_size for 'fr'. Ideally this will match [ 4, 12,  7,  3,  1] as in the label, but during training we 
+            # need to measure the loss, and that is done via cross entropy:
+            # 1. Convert the logits (== whatever output from projection layer) to probabilities via regular softmax.
+            # 2. Use decoder_label_tensor_batch.view(-1) to retrieve the index of the correct token (this is the id), so '4' in our example.
+            # 3. Use this index to see what probability that class got, so the softmaxed '-2.0720' here.
+            # 4. do 'loss -= log(probability)'
+            # 5. Do this for all predicted tokens (all 5 in our example) and this will give the total cross entropy loss.
+
             loss = loss_fn(transformer_output_tensor_batch.view(-1, tgt_tokenizer.get_vocab_size()), decoder_label_tensor_batch.view(-1))
 
             batch_iterator.set_postfix({f"loss": f"{loss.item():6.3f}"}) 					# Show loss on the tqdm progress bar.

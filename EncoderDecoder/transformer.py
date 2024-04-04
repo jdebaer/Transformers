@@ -101,14 +101,7 @@ class ProjectionLayer(nn.Module):
         # looked at itself + previous tokens/ids for the decoder self-attention. Each of these embeddings is now asked to predict the next word in
         # parallel. This is what happens during training. This is then compared with the shifted tokens/ids in the label.
         
-        print("oooooooooooooooooooooooooooooooooooooo")
-        print(torch.log_softmax(self.proj(decoder_output), dim = -1).size())
-        print(torch.argmax(torch.log_softmax(self.proj(decoder_output), dim = -1), dim = -1).size())
-        print(torch.argmax(torch.log_softmax(self.proj(decoder_output), dim = -1), dim = -1))
-        print("oooooooooooooooooooooooooooooooooooooo")
-
-
-        return torch.log_softmax(self.proj(decoder_output), dim = -1)				# log_softmax for more training stability.:
+        return torch.log_softmax(self.proj(decoder_output), dim = -1)				# log_softmax for more training stability.
 
 class Decoder(nn.Module):
 
@@ -228,8 +221,6 @@ class MultiHeadAttention(nn.Module):
         num_attention_heads = config['num_attention_heads']
         attention_head_input_dim = embed_size
         attention_head_output_dim = embed_size // num_attention_heads
-        print(attention_head_input_dim)
-        print(attention_head_output_dim)
         assert embed_size % num_attention_heads == 0, "Embedding size must be divisible by number of heads" 
         self.attention_heads = nn.ModuleList(
             [AttentionHead(config, attention_head_input_dim, attention_head_output_dim, type) for _ in range(num_attention_heads)]
@@ -265,6 +256,7 @@ class AttentionHead(nn.Module):
         super().__init__()
         
         self.type = type
+        self.config = config
 
         self.Wq = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
         if self.type == 'self':
@@ -310,33 +302,41 @@ class AttentionHead(nn.Module):
         # When then multiply each softmaxed attention weight with the corresponding value, [1, 5, 5] * [1, 5, <val size>] to go to [1, 5, <val size>] (returned).
         # Note that in our implementation <val size> will be 5 as well, although technically is does not have to be.
 
-        print("----------------------------")
-        print(caller)
-        print(type)
-        print("query:")
-        print(query.size())
-        print(query)
-        print("key:")
-        print(key.size())
-        print(key)
-        print("key transposed:")
-        print(key.transpose(-2,-1))
+        if self.config['debug']:
+            print("----------------------------")
+            print(caller)								# Will say "encoder" or "decoder".
+            print(type)									# Will say "self" or "cross".
+            print("query:")
+            print(query.size())
+            print(query)
+            print("key:")
+            print(key.size())
+            print(key)
+            print("key transposed:")
+            print(key.transpose(-2,-1))
 
         dim_of_key = key.size(-1)							# Can use dim of query as well, have to be the same.
-        attention_scores = torch.bmm(query, key.transpose(-2,-1))/sqrt(dim_of_key)	# Normalized dot product.
-        print("attention_scores:")
-        print(attention_scores.size())
-        print(attention_scores)
+        if self.config['debug']:
+            attention_scores = torch.bmm(query, key.transpose(-2,-1))			# Don't normalize so we can eyeball dot product easily.
+        else:
+            attention_scores = torch.bmm(query, key.transpose(-2,-1))/sqrt(dim_of_key)	# Normalized dot product.
 
-        if mask is not None:
-            print("mask:")
-            print(mask.size())
-            print(mask)
-            # Softmax has e ** x in the numerator, and e ** -inf == 0. Having 0 as the attention score is our objective with the causal mask.
-            attention_scores = attention_scores.masked_fill(mask == 0, float("-inf"))
-            print("attention_scores after masking:")
+        if self.config['debug']:
+            print("attention_scores:")
             print(attention_scores.size())
             print(attention_scores)
+
+        if mask is not None:
+            if self.config['debug']:
+                print("mask:")
+                print(mask.size())
+                print(mask)
+            # Softmax has e ** x in the numerator, and e ** -inf == 0. Having 0 as the attention score is our objective with the causal mask.
+            attention_scores = attention_scores.masked_fill(mask == 0, float("-inf"))
+            if self.config['debug']:
+                print("attention_scores after masking:")
+                print(attention_scores.size())
+                print(attention_scores)
 
             # Note to understand how the mask is used with the dot product (skipping the normalization here):
             # When we multiply query with key, we essentially measure the resonance of every word with every word in the sequence.
@@ -357,27 +357,33 @@ class AttentionHead(nn.Module):
             # 7,8,9                                7,8,-inf
             #
         attention_weights = F.softmax(attention_scores, dim = -1)
-        print("attention_weights:")
-        print(attention_weights.size())
-        print(attention_weights)
+        if self.config['debug']:
+            print("attention_weights:")
+            print(attention_weights.size())
+            print(attention_weights)
 
-        # To do: restore dropout after debugging.
-        #if dropout is not None:
-        #   attention_weights = dropout(attention_weights)
+        if dropout is not None:
+           attention_weights = dropout(attention_weights)
 
         ## return attention_weights.bmm(value), attention_weights			# To do: incorporate attention_weights for visualization.
         #return attention_weights.bmm(value)						# Attention weights * values == head context vector.
-        print("value:")
-        print(value.size())
-        print(value)
+        if self.config['debug']:
+            print("value:")
+            print(value.size())
+            print(value)
         head_context_vector = torch.bmm(attention_weights, value)
-        print("head_context_vector:")
-        print(head_context_vector.size())
-        print(head_context_vector)
+
+        if self.config['debug']:
+            print("head_context_vector:")
+            print(head_context_vector.size())
+            print(head_context_vector)
 
         return head_context_vector
 
 def build_transformer(config, encoder_vocab_size, decoder_vocab_size, encoder_seq_len, decoder_seq_len) -> Transformer:
+
+    if config['debug']:
+        print("Building transformer in debug mode.")
 
     transformer = Transformer(config, encoder_vocab_size, decoder_vocab_size, encoder_seq_len, decoder_seq_len)
 #    Parameter initialization
