@@ -168,7 +168,7 @@ def get_dataloader(config):
     # This function eventually wants to set up BilingualDataset objects. Let's first stage all we need for that.
     
     # 1. We need the raw dataset. We use load_dataset from Hugging Face's datasets for that.
-    if config['debug']:
+    if config['edu']:
         print(config['src_language'])
         print(config['tgt_language'])
     # dataset_raw = load_dataset('opus_books', f"{config['src_language']}-{config['tgt_language']}", split='train', streaming=True)
@@ -200,7 +200,7 @@ def get_dataloader(config):
     #print(f'Maximum sequence length of tokenized target sentences is {tgt_seq_len}')
     # For now we use the maximum of the two + 2 as our joint seq_len. We do +2 because we're going to add up to 2 special tokens.
     seq_len = max(src_seq_len, tgt_seq_len) + 2
-    if config['debug']:
+    if config['edu']:
         print(f'We use sequence length {seq_len}')
     
 
@@ -297,7 +297,7 @@ def train_model(config):
             # Now let's compare these batched predictions with our batched labels.
             # First view transforms (batch_size, seq_len, tgt_vocab_size) to (batch_size * seq_len, tgt_vocab_size)
             # label.view(-1) flattens out the complete batch over all seq_lens, so to batch_size * seq_len
-            if config['debug']:
+            if config['edu']:
                 print(" ------- cross entropy -------")
                 print("encoder_input_tensor_batch:")
                 print(encoder_input_tensor_batch)
@@ -311,7 +311,7 @@ def train_model(config):
                 print(" -----------------------------")
 
             # Notes on how cross entropy loss function works here:
-            # When 'debug' is on and when using 'en-fr.tiny', we can nicely inspect what's happening here.
+            # When 'edu' is on and when using 'en-fr.tiny', we can nicely inspect what's happening here.
 
             # encoder_input_tensor_batch: (en)
             # tensor([[ 2,  4, 10,  9,  3]]) -> [SOS] I am Chloe [EOS]

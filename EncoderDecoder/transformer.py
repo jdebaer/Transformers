@@ -302,7 +302,7 @@ class AttentionHead(nn.Module):
         # When then multiply each softmaxed attention weight with the corresponding value, [1, 5, 5] * [1, 5, <val size>] to go to [1, 5, <val size>] (returned).
         # Note that in our implementation <val size> will be 5 as well, although technically is does not have to be.
 
-        if self.config['debug']:
+        if self.config['edu']:
             print("----------------------------")
             print(caller)								# Will say "encoder" or "decoder".
             print(type)									# Will say "self" or "cross".
@@ -316,24 +316,24 @@ class AttentionHead(nn.Module):
             print(key.transpose(-2,-1))
 
         dim_of_key = key.size(-1)							# Can use dim of query as well, have to be the same.
-        if self.config['debug']:
+        if self.config['edu']:
             attention_scores = torch.bmm(query, key.transpose(-2,-1))			# Don't normalize so we can eyeball dot product easily.
         else:
             attention_scores = torch.bmm(query, key.transpose(-2,-1))/sqrt(dim_of_key)	# Normalized dot product.
 
-        if self.config['debug']:
+        if self.config['edu']:
             print("attention_scores:")
             print(attention_scores.size())
             print(attention_scores)
 
         if mask is not None:
-            if self.config['debug']:
+            if self.config['edu']:
                 print("mask:")
                 print(mask.size())
                 print(mask)
             # Softmax has e ** x in the numerator, and e ** -inf == 0. Having 0 as the attention score is our objective with the causal mask.
             attention_scores = attention_scores.masked_fill(mask == 0, float("-inf"))
-            if self.config['debug']:
+            if self.config['edu']:
                 print("attention_scores after masking:")
                 print(attention_scores.size())
                 print(attention_scores)
@@ -357,7 +357,7 @@ class AttentionHead(nn.Module):
             # 7,8,9                                7,8,-inf
             #
         attention_weights = F.softmax(attention_scores, dim = -1)
-        if self.config['debug']:
+        if self.config['edu']:
             print("attention_weights:")
             print(attention_weights.size())
             print(attention_weights)
@@ -367,13 +367,13 @@ class AttentionHead(nn.Module):
 
         ## return attention_weights.bmm(value), attention_weights			# To do: incorporate attention_weights for visualization.
         #return attention_weights.bmm(value)						# Attention weights * values == head context vector.
-        if self.config['debug']:
+        if self.config['edu']:
             print("value:")
             print(value.size())
             print(value)
         head_context_vector = torch.bmm(attention_weights, value)
 
-        if self.config['debug']:
+        if self.config['edu']:
             print("head_context_vector:")
             print(head_context_vector.size())
             print(head_context_vector)
@@ -382,8 +382,8 @@ class AttentionHead(nn.Module):
 
 def build_transformer(config, encoder_vocab_size, decoder_vocab_size, encoder_seq_len, decoder_seq_len) -> Transformer:
 
-    if config['debug']:
-        print("Building transformer in debug mode.")
+    if config['edu']:
+        print("Building transformer in 'edu' mode.")
 
     transformer = Transformer(config, encoder_vocab_size, decoder_vocab_size, encoder_seq_len, decoder_seq_len)
 #    Parameter initialization
