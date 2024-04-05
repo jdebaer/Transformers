@@ -109,7 +109,13 @@ def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_le
 
             src_sentence = batch['src_text'][0]
             tgt_sentence = batch['tgt_text'][0]
-            transformer_infer_sentence = tgt_tokenizer.decode(transformer_infer.detach().cpu().numpy())
+
+            # The model, it's inputs and the model parameters should all be on the same device, ideally CUDA. The ouputs as well, if they are going to interact with the model again
+            # which is typically the case while inferencing a transformer, as we use the output again as input. As soon as we have our final inferencing though, then we have output
+            # that no longer will need to interact with the model. This means we can use detach() -> returns a tensor detached from the graph and then cpu() to move it to the CPU.
+            # We should always do this ASAP whenever we end up with a tensor that won't need to interact with the model anymore, so save RAM.
+
+            transformer_infer_sentence = tgt_tokenizer.decode(transformer_infer.detach().cpu().numpy()) 
 
             # Lists are for TensorBoard: to do.
             # src_sentence_tb.append(src_sentence)
