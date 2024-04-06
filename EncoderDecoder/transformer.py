@@ -302,6 +302,13 @@ class AttentionHead(nn.Module):
         # When then multiply each softmaxed attention weight with the corresponding value, [1, 5, 5] * [1, 5, <val size>] to go to [1, 5, <val size>] (returned).
         # Note that in our implementation <val size> will be 5 as well, although technically is does not have to be.
 
+        # Note on how this behaves during validation, and with cross attention:
+        # In this case the incoming query will be (batch_size, <number of predicted ids so far>, embed size). Let's do an example with [1, 2, 768] 
+        # meaning that 2 ids heve been predicted so far. In this case the matrix multiplications looks like this:
+        # [1, 2, 768] x [1, 768, 5] ---> [1,2,5] which gives us the resonance of each predicted token with the output from the encoder.
+        # Then we have [1, 2, 5] x [1, 5, <val size>] ---> [1,2,<val size>] which is what we need in the next step.
+        # For the decoder self attention it's the same but it would start out as [1, 2, 768] x [1, 768, 2] -> [1, 2, 2].
+
         if self.config['edu']:
             print("----------------------------")
             print(caller)								# Will say "encoder" or "decoder".

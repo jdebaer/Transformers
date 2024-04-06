@@ -27,36 +27,44 @@ def get_model_file_path(config, epoch: str):
 
 def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_batch, src_tokenizer, tgt_tokenizer, max_len, device): 
 
-    # Note: would not work on a batch with more than 1 items in it. Need to rework this for validation better than PoC if we really want to batch.
+    # Note: would not work on a batch with more than 1 items in it. Need to rework this for validation better than 'edu'.
 
-    sos_id = src_tokenizer.token_to_id('[SOS]') 							# Either tokenizer can be used for this.
-    eos_id = src_tokenizer.token_to_id('[EOS]') 							# Either tokenizer can be used for this.
+    sos_id = src_tokenizer.token_to_id('[SOS]') 								# Either tokenizer can be used for this.
+    eos_id = src_tokenizer.token_to_id('[EOS]') 								# Either tokenizer can be used for this.
 
-    # Generate the encoder output. We'll use it in every decoder invocation where we predict the next id.
-    encoder_output_tensor_batch = model.encode(encoder_input_tensor_batch, encoder_input_tensor_mask_batch) # Dim (1, seq_len, embed_size).
+    # Generate the encoder output that we need for the cross attention.
+    encoder_output_tensor_batch = model.encode(encoder_input_tensor_batch, encoder_input_tensor_mask_batch) 	# Dim (1, seq_len, embed_size).
 
     # Now get the decoder started with just the [SOS] token.
-    decoder_input_tensor_batch = torch.empty(1,1).fill_(sos_id).type_as(encoder_input_tensor_batch).to(device) # Dim at this point is (1,1).
+    # We have to provide a batch dimension here if we want to invoke our model. We're removing that dimensions again before returning.
+    decoder_input_tensor_batch = torch.empty(1,1).fill_(sos_id).type_as(encoder_input_tensor_batch).to(device) 	# Dim at this point is (1,1).
     
-    # Now use the decoder with cross attention to keep predicting the next id until we get the '[EOS]' id or until we reach max_len (which is seq_len).
+    # Now use the decoder with our cross attention to keep predicting the next id until we get the '[EOS]' id or until we reach max_len (which is seq_len).
     while True:
-        if decoder_input_tensor_batch.size(1) == max_len: 						# We filled it up with the previous iteration.
-            break											# Note no '[EOS]' id in this case.
+        if decoder_input_tensor_batch.size(1) == max_len: 							# We filled it up with the previous iteration.
+            break												# Note no '[EOS]' id in this case.
      
-        # You might ask why we need a causal mask, since we start predicting from '[SOS]'.
-        # This is because on every iteration, our model predicts the next id for EVERY id that we provide as input, not just for the last id.
-        # As we will see, we ignore all these 'previous words' predictions, so an open question is: do we actually need to causal mask.
+        # Open question: on every inference, we predict the next id, but also all the previous ids, similar to what we do during traininig.
+        # However, when inferencing, we only use the the context vector for the prediction based on the **final** id in the input. All other
+        # context vectors are ignored, and only this "last" one is pushed through the projection layer. The question is: given all this, do
+        # we need to provide a causal mask? 
         # Note that there is for sure no padding going on, so we don't need to mask for padding in the decoder.
+
         decoder_input_tensor_mask_batch = causal_mask(decoder_input_tensor_batch.size(1)).type_as(encoder_input_tensor_mask_batch).to(device)
         
-        # Do inference using the decoder, while providing it with the cross attention of dim (batch_size, seq_len) which here is (1, seq_len).
-        # Dim is (batch_size, <how many ids we have so far in the sequence>, embed_size) with batch_size being 1 here.
+        # Inference using the decoder.
+        # Dim of cross attention is (batch_size, seq_len, embed_size) which here is (1, seq_len, embed_size).
+        # Dim is (batch_size, <how many ids we have so far in the predicted sequence>, embed_size), with batch_size being 1 here as well.
+        # 
         decoder_output_tensor_batch = model.decode(decoder_input_tensor_batch, decoder_input_tensor_mask_batch, encoder_output_tensor_batch, encoder_input_tensor_mask_batch) 
 
-        # Now we feed ONLY THE LAST ([:,-1]) context vector in the predicted sequence so far to the projection layer to predict the next id.
+        # Now we feed ONLY THE LAST ([:,-1]) context vector (i.e., for the last id in the sequence so far) to the projection layer to predict the next id.
         # What we feed in has dim (1, embed_size) so the last context vector which has all the context for the previous ids.
+i       # Check: this should be dim (1, 1, embed_size).
         # Dim of probabilities consequently is (1, tgt_vocab_size) .
         probabilities = model.project(decoder_output_tensor_batch[:,-1]) 			
+
+        # Check: probabilities at this point should also be (1, 1, vocab_size).
 
         # Via the probabilities we select the next id by choosing the one with the highest probability (greedy).
         _, next_id = torch.max(probabilities, dim=1) 
@@ -75,11 +83,8 @@ def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_b
 
 def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, print_msg, global_state, writer, num_examples=1):
 
-    print("-------------------------------------------")
-    print("Running validation")
-    print("-------------------------------------------")
-
-    # Currently this is a PoC validation, where we print out the target sentence as well as the predicted sentence.
+    # num_examples is only relevant for 'edu' mode. For 'edu' mode, put 
+    # Good question to ask: why are we not passing on any decoder input? This is because when inferencing, we have the decoder start with '[SOS]'.
 
     model.eval()											# Put model in eval mode.
     count = 0
@@ -97,22 +102,21 @@ def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_le
             encoder_input_tensor_batch = batch['encoder_input_tensor'].to(device) 			# Dim is (batch_size,seq_len).
             encoder_input_tensor_mask_batch = batch['encoder_input_tensor_mask'].to(device) 		# Dim is (batch_size,1,1,seq_len).
 
-            assert encoder_input_tensor_batch.size(0) == 1, "Batch size for validation must be 1."
+            if config['edu']:
+                assert encoder_input_tensor_batch.size(0) == 1, "Batch size for validation must be 1."  # We set this, but making sure.
 
-            # We don't need to pass anything on for the decoder, since we're going to start decoding with '[SOS]'.
-            # The output is a (batch_size, seq_len) (or shorter than seq_len) where the last element in dim seq_len is '[EOS]'.
-            # transformer_infer only has one dimension, the size of which is the amount of generated ids.
+            # transformer_infer only has one dimension, the size of which is the amount of generated ids, including '[SOS]'.
             transformer_infer = greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_batch, src_tokenizer, tgt_tokenizer, seq_len, device)
-            print("*********** Inferred ids ***********")
-            print(transformer_infer)
-            print("************************************")
 
             src_sentence = batch['src_text'][0]
             tgt_sentence = batch['tgt_text'][0]
 
-            # The model, it's inputs and the model parameters should all be on the same device, ideally CUDA. The ouputs as well, if they are going to interact with the model again
-            # which is typically the case while inferencing a transformer, as we use the output again as input. As soon as we have our final inferencing though, then we have output
-            # that no longer will need to interact with the model. This means we can use detach() -> returns a tensor detached from the graph and then cpu() to move it to the CPU.
+            # Note on detach() and cpu():
+            # The model, it's inputs and the model parameters should all be on the same device, ideally CUDA. 
+            # This goes for the ouputs as well, if they are going to interact with the model again
+            # which is typically the case while inferencing a transformer, as we use the output again as input. 
+            # As soon as we have our final inferencing though, then we have output that no longer will need to interact with the model. 
+            # This means we can use detach() -> returns a tensor detached from the graph and then cpu() to move it to the CPU.
             # We should always do this ASAP whenever we end up with a tensor that won't need to interact with the model anymore, so save RAM.
 
             transformer_infer_sentence = tgt_tokenizer.decode(transformer_infer.detach().cpu().numpy()) 
@@ -125,10 +129,11 @@ def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_le
             # Don't use the regular print function as it will mess up tqdm.
             print_msg('-' * console_width)
             print_msg(f'SOURCE: {src_sentence}')
-            print_msg(f'TARGET: {tgt_sentence}')
+            print_msg(f'TARGET/LABEL: {tgt_sentence}')
+            print_msg(f'PREDICTED IDs: {transformer_infer}')
             print_msg(f'PREDICTED: {transformer_infer_sentence}')
 
-            if count == num_examples:
+            if config['edu'] and (count == num_examples):
                 break
 
 #    if writer: 	# To do: TensorBoard. 
@@ -211,7 +216,10 @@ def get_dataloader(config):
     # Now we wrap these __get_item()__ Datasets in DataLoaders so that we get batches.
 
     train_dataloader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True)
-    valid_dataloader = DataLoader(valid_dataset, batch_size=1, shuffle=True) # For validation we're doing one by one for now.
+    if config['edu']:
+        valid_dataloader = DataLoader(valid_dataset, batch_size=1, shuffle=True) 			# In 'edu' mode we're doing one by one.
+    else:
+        valid_dataloader = DataLoader(valid_dataset, batch_size=config['batch_size'], shuffle=True)	# This is for real validation where we calc stats.
 
     return train_dataloader, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len
 
@@ -346,12 +354,12 @@ def train_model(config):
             optimizer.step()
             optimizer.zero_grad() 										# Zero out the gradient.
 
-
-            # run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, lambda msg: batch_iterator.write(msg), global_step, writer)
+            run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, lambda msg: batch_iterator.write(msg), global_step, writer)
 
             global_step += 1 											# Used by TensorBoard to keep track of the loss.
 
-            break # REMOVE THIS - temporary in order to just train with one batch containing one sample.
+            if config['edu']:
+                break 												# Just show one run in 'edu' mode.
 
         # Put run_validate here to run validation after every epoch - move model.train() accordingly.
 

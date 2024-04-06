@@ -18,7 +18,7 @@ def get_config():
         'tokenizer_file': 'tokenizer_{0}.json',
         'experiment_name': 'runs/tmodel',
         'dropout_prob': 0.1,
-        'edu': False
+        'edu': True
     }
 
 def get_model_file_path(config, epoch: str):
