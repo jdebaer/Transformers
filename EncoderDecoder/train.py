@@ -59,12 +59,10 @@ def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_b
         decoder_output_tensor_batch = model.decode(decoder_input_tensor_batch, decoder_input_tensor_mask_batch, encoder_output_tensor_batch, encoder_input_tensor_mask_batch) 
 
         # Now we feed ONLY THE LAST ([:,-1]) context vector (i.e., for the last id in the sequence so far) to the projection layer to predict the next id.
-        # What we feed in has dim (1, embed_size) so the last context vector which has all the context for the previous ids.
-i       # Check: this should be dim (1, 1, embed_size).
+        # What we feed in has dim (batch_size, embed_size) so each last context vector for each sequence.
+        # This last context vector has all the context from the previous ids so it's all we need.
         # Dim of probabilities consequently is (1, tgt_vocab_size) .
         probabilities = model.project(decoder_output_tensor_batch[:,-1]) 			
-
-        # Check: probabilities at this point should also be (1, 1, vocab_size).
 
         # Via the probabilities we select the next id by choosing the one with the highest probability (greedy).
         _, next_id = torch.max(probabilities, dim=1) 
@@ -73,8 +71,7 @@ i       # Check: this should be dim (1, 1, embed_size).
         # item() converts tensor with one element to a standard number (not a tensor).
         # On the first run our dim goes from (1,1) to (1,2) and we keep growing in that dimension.
         decoder_input_tensor_batch = torch.cat(
-		[decoder_input_tensor_batch, torch.empty(1,1).fill_(next_id.item()).type_as(encoder_input_tensor_batch).to(device)],
-	dim=1) # dim is the dimension in which we do the concat
+		[decoder_input_tensor_batch, torch.empty(1,1).fill_(next_id.item()).type_as(encoder_input_tensor_batch).to(device)], dim=1) # dim is the dimension in which we do the concat
     
         if next_id == eos_id:
             break
