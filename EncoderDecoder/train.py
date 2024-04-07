@@ -31,13 +31,16 @@ def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_b
 
     sos_id = src_tokenizer.token_to_id('[SOS]') 								# Either tokenizer can be used for this.
     eos_id = src_tokenizer.token_to_id('[EOS]') 								# Either tokenizer can be used for this.
+    pad_id = src_tokenizer.token_to_id('[PAD]') 								# Either tokenizer can be used for this.
 
     # Generate the encoder output that we need for the cross attention.
     encoder_output_tensor_batch = model.encode(encoder_input_tensor_batch, encoder_input_tensor_mask_batch) 	# Dim (1, seq_len, embed_size).
 
     # Now get the decoder started with just the [SOS] token.
     # We have to provide a batch dimension here if we want to invoke our model. We're removing that dimensions again before returning.
-    decoder_input_tensor_batch = torch.empty(1,1).fill_(sos_id).type_as(encoder_input_tensor_batch).to(device) 	# Dim at this point is (1,1).
+    #decoder_input_tensor_batch = torch.empty(1,1).fill_(sos_id).type_as(encoder_input_tensor_batch).to(device) 	# Dim at this point is (1,1).
+    # The batch dim below is '1' if in 'edu' mode and the regular batch size otherwise.
+    decoder_input_tensor_batch = torch.empty(encoder_input_tensor_batch.size(0),1).fill_(sos_id).type_as(encoder_input_tensor_batch).to(device) 
     
     # Now use the decoder with our cross attention to keep predicting the next id until we get the '[EOS]' id or until we reach max_len (which is seq_len).
     while True:
@@ -61,24 +64,78 @@ def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_b
         # Now we feed ONLY THE LAST ([:,-1]) context vector (i.e., for the last id in the sequence so far) to the projection layer to predict the next id.
         # What we feed in has dim (batch_size, embed_size) so each last context vector for each sequence.
         # This last context vector has all the context from the previous ids so it's all we need.
-        # Dim of probabilities consequently is (1, tgt_vocab_size) .
+        # Dim of probabilities consequently is (batch_size, tgt_vocab_size), with batch_size being '1' when in 'edu' mode.
         probabilities = model.project(decoder_output_tensor_batch[:,-1]) 			
+        print("*****************************************")
+        print('probabilities:')
+        print(probabilities.size())
+        print(probabilities)
+        print("--------")
+        
 
         # Via the probabilities we select the next id by choosing the one with the highest probability (greedy).
         _, next_id = torch.max(probabilities, dim=1) 
+        print("decoder_input_tensor_batch:")
+        print(decoder_input_tensor_batch.size())
+        print(decoder_input_tensor_batch)
+        print("--------")
+        print("next_id:")
+        print(next_id.size())
+        print(next_id)
+        print("--------")
+        print("next_id unsqueezed:")
+        print(next_id.unsqueeze(0).size())
+        print(next_id.unsqueeze(0))
+        print("--------")
+        print("next_id unsqueezed and transposed:")
+        print(next_id.unsqueeze(0).transpose(0,1).size())
+        print(next_id.unsqueeze(0).transpose(0,1))
+        print("*****************************************")
 
         # Now we need to append the next id to decoder_input_tensor_batch that we created above (in the seq dimension).
         # item() converts tensor with one element to a standard number (not a tensor).
-        # On the first run our dim goes from (1,1) to (1,2) and we keep growing in that dimension.
+        # On the first run our dim goes from (batch_size,1) to (batch_size,2) and we keep growing in that dimension.
         decoder_input_tensor_batch = torch.cat(
-		[decoder_input_tensor_batch, torch.empty(1,1).fill_(next_id.item()).type_as(encoder_input_tensor_batch).to(device)], dim=1) # dim is the dimension in which we do the concat
-    
-        if next_id == eos_id:
-            break
+                # Below is the 'edu' mode version.
+		#[decoder_input_tensor_batch, torch.empty(1,1).fill_(next_id.item()).type_as(encoder_input_tensor_batch).to(device)],
+		[decoder_input_tensor_batch, next_id.unsqueeze(0).transpose(0,1).to(device)],
+                 
 
-    return decoder_input_tensor_batch.squeeze(0) # Remove the batch dimension so we end up with a tensor containing one dimension of ids.
+                # Below is what we have so far for non 'edu'.
+		# [decoder_input_tensor_batch, torch.empty(encoder_input_tensor_batch.size(0),1).fill_(next_id.item()).type_as(encoder_input_tensor_batch).to(device)],
+                dim=1) # dim is the dimension in which we do the concat
+        print("decoder_input_tensor_batch after concat:")
+        print(decoder_input_tensor_batch.size())
+        print(decoder_input_tensor_batch)
+        print("*****************************************")
 
-def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, print_msg, global_state, writer, num_examples=1):
+        # Note: removing this block as this does not work well when batching.
+        #       This means predictions like this are possible: tensor([ 2,  3,  3,  9, 11]). With this block that would have been tensor([ 2,  3]).
+        #       This means our model will learn to add padding after '[EOS]'/3 since in training samles '[EOS]' will always be followed by padding.
+        #if next_id == eos_id:
+        #
+        #    # Note 20240406: we assume that CEL is smart enough to add entropy if the predition is too short, so the code below is not needed.
+        #    # Note on the below:
+        #    # The ignore index for our Cross Entropy Loss function will ignore '[PAD]' tokens in the label/target.
+        #    # However, it's possible that a predicted translation is too short, e.g.:
+        #    # tensor([ 2, 10,  3]) while the label/target is tensor([ 2, 10, 8, 3,  1]).
+        #    # In this case, we still want some error for the missed '3' id in the target.
+        #    # So we fill up the prediction with padding tokens like this: tensor([ 2, 10,  3,  1,  1]).
+        #    # With this padding, cross entropy will be calculated for the first 4 ids.
+        #    # We will up the translation with padding tokens until we reach max_len.
+        #    #while decoder_input_tensor_batch.size(1) < max_len:
+        #    #    decoder_input_tensor_batch = torch.cat(
+        #    #	        [decoder_input_tensor_batch, torch.empty(1,1).fill_(pad_id).type_as(encoder_input_tensor_batch).to(device)],
+        #    #            dim=1) # dim is the dimension in which we do the concat
+        #        
+        #    break
+
+    if config['edu']:
+        return decoder_input_tensor_batch.squeeze(0), probabilities # Remove the batch dimension so we end up with a tensor containing one dimension of ids.
+    else:
+        return decoder_input_tensor_batch, probabilities
+
+def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, print_msg, global_state, writer, num_examples=1, loss_fn=None):
 
     # num_examples is only relevant for 'edu' mode. For 'edu' mode, put 
     # Good question to ask: why are we not passing on any decoder input? This is because when inferencing, we have the decoder start with '[SOS]'.
@@ -88,6 +145,7 @@ def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_le
     src_sentence_tb = []
     tgt_sentence_tb = []
     prd_sentence_tb = []
+    losses = []
       
     console_width = 80 											# Size of the control window.
 
@@ -102,40 +160,100 @@ def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_le
             if config['edu']:
                 assert encoder_input_tensor_batch.size(0) == 1, "Batch size for validation must be 1."  # We set this, but making sure.
 
-            # transformer_infer only has one dimension, the size of which is the amount of generated ids, including '[SOS]'.
-            transformer_infer = greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_batch, src_tokenizer, tgt_tokenizer, seq_len, device)
+            # transformer_infer only has one dimension, the size of which is the amount of generated ids, including '[SOS]'/2.
+            # Examples: tensor([[ 2,  1,  1, 10,  1]]), tensor([[ 2,  3]])
+            # Note: what we call logits here are the probabilities returned by the projection layer.
+            transformer_infer, transformer_infer_logits = greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_batch, src_tokenizer, tgt_tokenizer, seq_len, device)
 
-            src_sentence = batch['src_text'][0]
-            tgt_sentence = batch['tgt_text'][0]
+            print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
+            print(transformer_infer.size())
+            print(transformer_infer)
+            print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
 
-            # Note on detach() and cpu():
-            # The model, it's inputs and the model parameters should all be on the same device, ideally CUDA. 
-            # This goes for the ouputs as well, if they are going to interact with the model again
-            # which is typically the case while inferencing a transformer, as we use the output again as input. 
-            # As soon as we have our final inferencing though, then we have output that no longer will need to interact with the model. 
-            # This means we can use detach() -> returns a tensor detached from the graph and then cpu() to move it to the CPU.
-            # We should always do this ASAP whenever we end up with a tensor that won't need to interact with the model anymore, so save RAM.
+            if config['edu']:
 
-            transformer_infer_sentence = tgt_tokenizer.decode(transformer_infer.detach().cpu().numpy()) 
+                # Note on detach() and cpu():
+                # The model, it's inputs and the model parameters should all be on the same device, ideally CUDA. 
+                # This goes for the ouputs as well, if they are going to interact with the model again
+                # which is typically the case while inferencing a transformer, as we use the output again as input. 
+                # As soon as we have our final inferencing though, then we have output that no longer will need to interact with the model. 
+                # This means we can use detach() -> returns a tensor detached from the graph and then cpu() to move it to the CPU.
+                # We should always do this ASAP whenever we end up with a tensor that won't need to interact with the model anymore, so save RAM.
 
-            # Lists are for TensorBoard: to do.
-            # src_sentence_tb.append(src_sentence)
-            # tgt_sentence_tb.append(tgt_sentence)
-            # prd_sentence_tb.append(transformer_infer_sentence)
+                transformer_infer_sentence = tgt_tokenizer.decode(transformer_infer.detach().cpu().numpy()) 
 
-            # Don't use the regular print function as it will mess up tqdm.
-            print_msg('-' * console_width)
-            print_msg(f'SOURCE: {src_sentence}')
-            print_msg(f'TARGET/LABEL: {tgt_sentence}')
-            print_msg(f'PREDICTED IDs: {transformer_infer}')
-            print_msg(f'PREDICTED: {transformer_infer_sentence}')
+                src_sentence = batch['src_text'][0]
+                tgt_sentence = batch['tgt_text'][0]
 
-            if config['edu'] and (count == num_examples):
+                # Lists are for TensorBoard: to do.
+                # src_sentence_tb.append(src_sentence)
+                # tgt_sentence_tb.append(tgt_sentence)
+                # prd_sentence_tb.append(transformer_infer_sentence)
+
+                # Don't use the regular print function as it will mess up tqdm.
+                print_msg('-' * console_width)
+                print_msg(f'SOURCE: {src_sentence}')
+                print_msg(f'TARGET/LABEL: {tgt_sentence}')
+                print_msg(f'PREDICTED IDs: {transformer_infer}')
+                print_msg(f'PREDICTED: {transformer_infer_sentence}')
+
+                if count == num_examples:
+                    break
+
+                #    if writer: 	# To do: TensorBoard. 
+                #        # To do: TorchMetrics add this CharErrorRate, BLEU, WordErrorRate
+            else:
+
+                decoder_label_tensor_batch = batch['decoder_label_tensor'].to(device)
+                print("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+                print("transformer_infer_logits:")
+                print(transformer_infer_logits.size())
+                print(transformer_infer_logits)
+                print("---------")
+                print("decoder_label_tensor_batch:")
+                print(decoder_label_tensor_batch.size())
+                print(decoder_label_tensor_batch)
+                print("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+
+
+
+
+                # First one has to become (batch_size * seq_len, vocab_size) - second one has to become (batch_size * seq_len).
+                # The code below assumes that greedy_decode does not lose the batch dimension for transformer_infer.
+                loss = loss_fn(transformer_infer_logits.view(-1, tgt_tokenizer.get_vocab_size()), decoder_label_tensor_batch.view(-1))
+                print("no error")
                 break
-
-#    if writer: 	# To do: TensorBoard. 
-#        # To do: TorchMetrics add this CharErrorRate, BLEU, WordErrorRate
+            
         
+
+
+
+#    for batch in test_loader:
+#        inputs = batch['input']
+#        labels = batch['label']
+#
+#        # outputs is a tensor with size torch.Size([5, 1]) like tensor([[0.], [0.], [0.], [0.], [0.]])
+#        outputs = model(inputs)
+#
+#        # labels is a tensor with size torch.Size([5]) like tensor([0., 0., 0., 0., 0.])
+#        labels = labels.unsqueeze(1)
+#        # labels is now a tensor with size torch.Size([5, 1]) lie tensor([[0.], [0.], [0.], [0.], [0.]])
+#
+#        # Both labels and outputs are now a [5,1] array (replace 5 by what happens to be the batch size)
+#
+#        # loss below is a tensor with dimension zero as if it would be created with torch.tensor(0.4585)
+#        # So in other words, the loss function already gives us a single digit loss (as a tensor)
+#        loss = loss_function(outputs, labels)
+#
+#        # The above is the same as for training, it's what we do with the loss that makes the difference
+#
+#        losses.append(loss.detach().numpy()) # we convert loss from tensor to numpy
+#
+#    np_losses = np.asarray(losses) # list to np array for losses list
+#    np_losses_mean = np_losses.mean()
+#    np_losses_mean_asfloat32 = np_losses_mean.item()
+#    return np_losses_mean_asfloat32
+
     
 ####### VALIDATION #######
 ##########################
@@ -182,7 +300,7 @@ def get_dataloader(config):
     tgt_tokenizer = get_or_build_tokenizer(config, dataset_raw, config['tgt_language'])
 
     # 3. We split here. Could also do this after we got our BilingualDataset objects.
-    train_dataset_size = int(0.9 * len(dataset_raw))
+    train_dataset_size = int(0.8 * len(dataset_raw))
     valid_dataset_size = len(dataset_raw) - train_dataset_size
     train_dataset_raw, valid_dataset_raw = random_split(dataset_raw, [train_dataset_size, valid_dataset_size])
     
@@ -351,7 +469,7 @@ def train_model(config):
             optimizer.step()
             optimizer.zero_grad() 										# Zero out the gradient.
 
-            run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, lambda msg: batch_iterator.write(msg), global_step, writer)
+            run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, lambda msg: batch_iterator.write(msg), global_step, writer, loss_fn = loss_fn)
 
             global_step += 1 											# Used by TensorBoard to keep track of the loss.
 
