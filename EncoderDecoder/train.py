@@ -27,11 +27,11 @@ def get_model_file_path(config, epoch: str):
 
 def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_batch, src_tokenizer, tgt_tokenizer, max_len, device): 
 
+    # This is only used in 'edu' mode where we visually validate.
     # Note: would not work on a batch with more than 1 items in it. Need to rework this for validation better than 'edu'.
 
     sos_id = src_tokenizer.token_to_id('[SOS]') 								# Either tokenizer can be used for this.
     eos_id = src_tokenizer.token_to_id('[EOS]') 								# Either tokenizer can be used for this.
-    pad_id = src_tokenizer.token_to_id('[PAD]') 								# Either tokenizer can be used for this.
 
     # Generate the encoder output that we need for the cross attention.
     encoder_output_tensor_batch = model.encode(encoder_input_tensor_batch, encoder_input_tensor_mask_batch) 	# Dim (1, seq_len, embed_size).
@@ -64,17 +64,28 @@ def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_b
         # Now we feed ONLY THE LAST ([:,-1]) context vector (i.e., for the last id in the sequence so far) to the projection layer to predict the next id.
         # What we feed in has dim (batch_size, embed_size) so each last context vector for each sequence.
         # This last context vector has all the context from the previous ids so it's all we need.
-        # Dim of probabilities consequently is (batch_size, tgt_vocab_size), with batch_size being '1' when in 'edu' mode.
-        probabilities = model.project(decoder_output_tensor_batch[:,-1]) 			
+        # Dim of logits consequently is (batch_size, tgt_vocab_size), with batch_size being '1' when in 'edu' mode.
+        # Example: torch.Size([2, 13]) with 2 batch_size and 13 tgt_vocab_size.
+
+        # Additional insight:
+        # On each inference run during validation, we only push the LAST context vector through the projection layer, so we only get a probability
+        # distribution (softmax) for that one. This means that in order to calculate cross entropy loss on every predicted id, we need to store the 
+        # logits ourselves. We'll end up with a tensor of (batch_size, (seq_len - 1), vocab_size of logits) which we can feed to our CEL function at the end of
+        # each batch. Additional additional insight: even if were to push all context vectors through softmax, then I'm still not certain we could simply
+        # use those. The thinking here is that the predictions for the previous ids might not match what has previously had been predicted for that 
+        # id. Although it could be because temperature is applied *after* the projection.
+
+        logits = model.project(decoder_output_tensor_batch[:,-1]) 			
+
         print("*****************************************")
-        print('probabilities:')
-        print(probabilities.size())
-        print(probabilities)
+        print('logits:')
+        print(logits.size())
+        print(logits)
         print("--------")
         
 
-        # Via the probabilities we select the next id by choosing the one with the highest probability (greedy).
-        _, next_id = torch.max(probabilities, dim=1) 
+        # Via the logits we select the next id by choosing the one with the highest probability (greedy).
+        _, next_id = torch.max(logits, dim=1) 
         print("decoder_input_tensor_batch:")
         print(decoder_input_tensor_batch.size())
         print(decoder_input_tensor_batch)
@@ -109,33 +120,15 @@ def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_b
         print(decoder_input_tensor_batch)
         print("*****************************************")
 
-        # Note: removing this block as this does not work well when batching.
-        #       This means predictions like this are possible: tensor([ 2,  3,  3,  9, 11]). With this block that would have been tensor([ 2,  3]).
-        #       This means our model will learn to add padding after '[EOS]'/3 since in training samles '[EOS]' will always be followed by padding.
-        #if next_id == eos_id:
-        #
-        #    # Note 20240406: we assume that CEL is smart enough to add entropy if the predition is too short, so the code below is not needed.
-        #    # Note on the below:
-        #    # The ignore index for our Cross Entropy Loss function will ignore '[PAD]' tokens in the label/target.
-        #    # However, it's possible that a predicted translation is too short, e.g.:
-        #    # tensor([ 2, 10,  3]) while the label/target is tensor([ 2, 10, 8, 3,  1]).
-        #    # In this case, we still want some error for the missed '3' id in the target.
-        #    # So we fill up the prediction with padding tokens like this: tensor([ 2, 10,  3,  1,  1]).
-        #    # With this padding, cross entropy will be calculated for the first 4 ids.
-        #    # We will up the translation with padding tokens until we reach max_len.
-        #    #while decoder_input_tensor_batch.size(1) < max_len:
-        #    #    decoder_input_tensor_batch = torch.cat(
-        #    #	        [decoder_input_tensor_batch, torch.empty(1,1).fill_(pad_id).type_as(encoder_input_tensor_batch).to(device)],
-        #    #            dim=1) # dim is the dimension in which we do the concat
-        #        
-        #    break
+        if next_id == eos_id:
+            break
 
-    if config['edu']:
-        return decoder_input_tensor_batch.squeeze(0), probabilities # Remove the batch dimension so we end up with a tensor containing one dimension of ids.
-    else:
-        return decoder_input_tensor_batch, probabilities
+    return decoder_input_tensor_batch.squeeze(0) # Remove the batch dimension so we end up with a tensor containing one dimension of ids.
 
 def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, print_msg, global_state, writer, num_examples=1, loss_fn=None):
+
+    # This validation function goes over the complete valid_dataloader. We can call it after each training batch or after each training epoch (better).
+    # In 'edu' mode however, it does an id by id inference as if we would use it in production, with visual outputs.
 
     # num_examples is only relevant for 'edu' mode. For 'edu' mode, put 
     # Good question to ask: why are we not passing on any decoder input? This is because when inferencing, we have the decoder start with '[SOS]'.
@@ -156,21 +149,14 @@ def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_le
             
             encoder_input_tensor_batch = batch['encoder_input_tensor'].to(device) 			# Dim is (batch_size,seq_len).
             encoder_input_tensor_mask_batch = batch['encoder_input_tensor_mask'].to(device) 		# Dim is (batch_size,1,1,seq_len).
+            decoder_label_tensor_batch = batch['decoder_label_tensor'].to(device)
 
             if config['edu']:
                 assert encoder_input_tensor_batch.size(0) == 1, "Batch size for validation must be 1."  # We set this, but making sure.
 
-            # transformer_infer only has one dimension, the size of which is the amount of generated ids, including '[SOS]'/2.
-            # Examples: tensor([[ 2,  1,  1, 10,  1]]), tensor([[ 2,  3]])
-            # Note: what we call logits here are the probabilities returned by the projection layer.
-            transformer_infer, transformer_infer_logits = greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_batch, src_tokenizer, tgt_tokenizer, seq_len, device)
-
-            print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
-            print(transformer_infer.size())
-            print(transformer_infer)
-            print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
-
-            if config['edu']:
+                # transformer_infer only has one dimension, the size of which is the amount of generated ids, including '[SOS]'/2.
+                # Examples: tensor([[ 2,  1,  1, 10,  1]]), tensor([[ 2,  3]])
+                transformer_infer = greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_batch, src_tokenizer, tgt_tokenizer, seq_len, device)
 
                 # Note on detach() and cpu():
                 # The model, it's inputs and the model parameters should all be on the same device, ideally CUDA. 
@@ -202,25 +188,48 @@ def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_le
 
                 #    if writer: 	# To do: TensorBoard. 
                 #        # To do: TorchMetrics add this CharErrorRate, BLEU, WordErrorRate
+
             else:
 
-                decoder_label_tensor_batch = batch['decoder_label_tensor'].to(device)
-                print("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
-                print("transformer_infer_logits:")
-                print(transformer_infer_logits.size())
-                print(transformer_infer_logits)
-                print("---------")
-                print("decoder_label_tensor_batch:")
-                print(decoder_label_tensor_batch.size())
-                print(decoder_label_tensor_batch)
-                print("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+
+                # Notes on how we measure loss, during training and here during validation:
+                # Training: 
+                # The label is the input (target language) which is shifted right with one position, because inference during training also starts with 'SOS'.
+                # So during training, the amount of inferences is the same as the number of ids in the sequence. Example: if seq_len is 5, then an example
+                # label can be [6, 7, 8, 9, 3] with 3 being 'EOS', and the '6' was predicted from the '[SOS]' id in the input.
+                # Validation:
+                # During validation, we start with a tensor that just has '[SOS]', and we're completing that tensor until we hit seq_len, which may or may
+                # not included padding tokens (or even other tokens if the prediction is not very good) after the '[OES]' token (if any). This means that
+                # for each sample in the batch, we're making (seq_len - 1) predictions that need to be compared with the label. We can "chop off" the last
+                # id in the label because this will always be a padding token (because we add *2* tokens to max-sized sentence to calc seq_len). We can then 
+                # feed these (seq_len - 1) logit arrays and the (seq_len - 1) class ids (ids) to CEL (times batch_size).
+
+                # Note: the sequence below is identical to how we train - we're just using the validation batch now.
+                
+                #encoder_input_tensor_batch = batch['encoder_input_tensor'].to(device) 				# dim is (batch_size,seq_len).
+                decoder_input_tensor_batch = batch['decoder_input_tensor'].to(device) 				# dim is (batch_size_seq_len).
+                #encoder_input_tensor_mask_batch = batch['encoder_input_tensor_mask'].to(device) 			# dim is (batch_size,1,1,seq_len).
+                decoder_input_tensor_mask_batch = batch['decoder_input_tensor_mask'].to(device) 			# dim is (batch_size,1,seq_len,seq_len).
+                #decoder_label_tensor_batch = batch['decoder_label_tensor'].to(device)                               # dim is (batch, seq_len).
+
+                encoder_output_tensor_batch = model.encode(encoder_input_tensor_batch, encoder_input_tensor_mask_batch) 
+                decoder_output_tensor_batch = model.decode(decoder_input_tensor_batch, decoder_input_tensor_mask_batch, encoder_output_tensor_batch, encoder_input_tensor_mask_batch )
+                transformer_output_tensor_batch = model.project(decoder_output_tensor_batch) 
+
+                loss = loss_fn(transformer_output_tensor_batch.view(-1, tgt_tokenizer.get_vocab_size()), decoder_label_tensor_batch.view(-1))
+
+                print("loss:")
+                print(loss)
 
 
 
 
                 # First one has to become (batch_size * seq_len, vocab_size) - second one has to become (batch_size * seq_len).
                 # The code below assumes that greedy_decode does not lose the batch dimension for transformer_infer.
-                loss = loss_fn(transformer_infer_logits.view(-1, tgt_tokenizer.get_vocab_size()), decoder_label_tensor_batch.view(-1))
+                # loss = loss_fn(transformer_infer_logits.view(-1, tgt_tokenizer.get_vocab_size()), decoder_label_tensor_batch.view(-1))
+                # At this point loss is still a tensor that's in the graph and potentiall on cuda if we have it.
+                # losses can be a list - to be created.
+                # losses.append(loss.detach().cpu().numpy())
                 print("no error")
                 break
             
@@ -447,7 +456,7 @@ def train_model(config):
             # tensor([[-3.1357, -2.7117, -2.7288, -2.1729, -2.0720, -2.4078, -3.2586, -2.9551, -2.6074, -2.2920, -2.0198, -2.7384, -3.4311],
             # <there are seq_len elements in this dimension, one for each token to be predicted>]], grad_fn=<ViewBackward0>)
             #
-            # The tensor above, returned by the projection layer, contains 12 'log_softmaxed probabilities' per token to be predicted, where
+            # The tensor above, returned by the projection layer, contains 12 'log_softmaxed logits' per token to be predicted, where
             # 12 corresponds to vocab_size for 'fr'. Ideally this will match [ 4, 12,  7,  3,  1] as in the label, but during training we 
             # need to measure the loss, and that is done via cross entropy:
             # 1. Convert the logits (== whatever output from projection layer) to probabilities via regular softmax.

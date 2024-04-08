@@ -101,6 +101,9 @@ class ProjectionLayer(nn.Module):
         # looked at itself + previous tokens/ids for the decoder self-attention. Each of these embeddings is now asked to predict the next word in
         # parallel. This is what happens during training. This is then compared with the shifted tokens/ids in the label.
         
+        # What we are returning are not really probabilties because we use log_softmax. We can call these the logits because they will
+        # still be turned into probabilities by softmax as part of the cross entropy loss calculation. Technically, the logits are what
+        # is returned by top projection layer.
         return torch.log_softmax(self.proj(decoder_output), dim = -1)				# log_softmax for more training stability.
 
 class Decoder(nn.Module):
