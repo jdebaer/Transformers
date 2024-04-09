@@ -210,6 +210,10 @@ class FeedForward(nn.Module):
         return x
 
 class MultiHeadAttention(nn.Module):
+
+    # Multi-head attention can learn different types of context, but they cannot abstract. Abstraction is implemented by stacking
+    # multiple transformer blocks on top of each other. This is done at the level of the Encoder and Decoder classes. Examples of 
+    # abstraction are learning if this text is a poem, or a recipe, or a review, etc.
     
     def __init__(self, config, type='self'):
         super().__init__()
@@ -351,6 +355,7 @@ class AttentionHead(nn.Module):
             # Note to understand how the mask is used with the dot product (skipping the normalization here):
             # When we multiply query with key, we essentially measure the resonance of every word with every word in the sequence.
             # However, for the first word, we don't want to do that for any word that follows (and so on for 2nd, 3rd word ...).
+            #  Q     *   Kt
             # 
             # 1,1,1    1,2,3   3, 6, 9    3 here is the resonance of the first word with itself, while 6 is the resonance of word 1 with word 2.
             # 2,2,2  * 1,2,3 = 6,12,18    However, we want to mask out the 6 since we only want words to resonate with themselves or previous words.
@@ -366,6 +371,8 @@ class AttentionHead(nn.Module):
             # 4,5,6 -> masked_fill([[[1,1,0]]]) -> 4,5,-inf
             # 7,8,9                                7,8,-inf
             #
+
+        # Note on the softmax: has to be applied over the products of 1 query with all the keys, not other way round.
         attention_weights = F.softmax(attention_scores, dim = -1)
         if self.config['edu']:
             print("attention_weights:")
@@ -381,6 +388,11 @@ class AttentionHead(nn.Module):
             print("value:")
             print(value.size())
             print(value)
+
+        # There are all the weights for one query (with all keys), now we grab the corresponding required vector change from each value.
+        # This is for the type of context that this head is specializing in.
+        # In our example this is the [1, 5, 5] * [1, 5, <val size>] to go to [1, 5, <val size>] with <val size> being embed_size/#heads again.
+        # All these "scaled down" suggested vector changes are then scaled up again to embed_size, via Wo, over all attention heads.
         head_context_vector = torch.bmm(attention_weights, value)
 
         if self.config['edu']:
