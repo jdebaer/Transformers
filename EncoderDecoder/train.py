@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import warnings
+import numpy as np
 
 from torch.utils.data import Dataset, DataLoader, random_split
 from datasets import load_dataset
@@ -29,7 +30,6 @@ def greedy_decode(model, encoder_input_tensor_batch, encoder_input_tensor_mask_b
 
     # This is only used in 'edu' mode where we visually validate.
     # Note: would not work on a batch with more than 1 items in it. Need to rework this for validation better than 'edu'.
-
     sos_id = src_tokenizer.token_to_id('[SOS]') 								# Either tokenizer can be used for this.
     eos_id = src_tokenizer.token_to_id('[EOS]') 								# Either tokenizer can be used for this.
 
@@ -138,7 +138,7 @@ def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_le
     src_sentence_tb = []
     tgt_sentence_tb = []
     prd_sentence_tb = []
-    losses = []
+    batch_loss_values = []
       
     console_width = 80 											# Size of the control window.
 
@@ -218,11 +218,11 @@ def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_le
 
                 loss = loss_fn(transformer_output_tensor_batch.view(-1, tgt_tokenizer.get_vocab_size()), decoder_label_tensor_batch.view(-1))
 
-                print("loss:")
-                print(loss)
-
-
-
+                # We're not using this loss to update the weights so lets detach it.
+                #loss = loss.detach().cpu().numpy()
+                # Faster way:
+                batch_loss_value = loss.item()
+                batch_loss_values.append(batch_loss_value)
 
                 # First one has to become (batch_size * seq_len, vocab_size) - second one has to become (batch_size * seq_len).
                 # The code below assumes that greedy_decode does not lose the batch dimension for transformer_infer.
@@ -230,10 +230,11 @@ def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_le
                 # At this point loss is still a tensor that's in the graph and potentiall on cuda if we have it.
                 # losses can be a list - to be created.
                 # losses.append(loss.detach().cpu().numpy())
-                print("no error")
-                break
             
-        
+    if not config['edu']:        
+        np_batch_loss_values = np.asarray(batch_loss_values) # list to np array for losses list
+        valid_loss = np_batch_loss_values.mean()
+        return valid_loss
 
 
 
@@ -258,10 +259,6 @@ def run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_le
 #
 #        losses.append(loss.detach().numpy()) # we convert loss from tensor to numpy
 #
-#    np_losses = np.asarray(losses) # list to np array for losses list
-#    np_losses_mean = np_losses.mean()
-#    np_losses_mean_asfloat32 = np_losses_mean.item()
-#    return np_losses_mean_asfloat32
 
     
 ####### VALIDATION #######
@@ -355,6 +352,9 @@ def get_model(config, src_vocab_size, tgt_vocab_size, seq_len):
 
 def train_model(config):
 
+    epoch_train_losses = []
+    epoch_valid_losses = []
+
     # Define the device.
     # Note: model and data must be put on the same device. Loss funtion as well if it inherits from torch.nn.
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -396,6 +396,11 @@ def train_model(config):
     loss_fn = nn.CrossEntropyLoss(ignore_index=src_tokenizer.token_to_id('[PAD]'), label_smoothing=0.1).to(device)    
 
     for epoch in range(initial_epoch, config['num_epochs']):
+
+        epoch_valid_loss = 0
+        epoch_train_loss = 0
+
+        batch_loss_values = []
 
         # model.train() 							# Put model.train() here if you run validation after each epoch.
         batch_iterator = tqdm(train_dataloader, desc=f'Processing epoch {epoch:02d}') # tqdm is what draws the nice progress bars, wrap it around DataLoader
@@ -466,7 +471,11 @@ def train_model(config):
             # 5. Do this for all predicted tokens (all 5 in our example) and this will give the total cross entropy loss.
 
             loss = loss_fn(transformer_output_tensor_batch.view(-1, tgt_tokenizer.get_vocab_size()), decoder_label_tensor_batch.view(-1))
-
+     
+            # item() automatically brings it back to the cpu.
+            batch_loss_value = loss.item()
+            batch_loss_values.append(batch_loss_value)
+  
             batch_iterator.set_postfix({f"loss": f"{loss.item():6.3f}"}) 					# Show loss on the tqdm progress bar.
             writer.add_scalar('train_loss', loss.item(), global_step) 						# This is for TensorBoard, still needs work.
             writer.flush()											# This is for TensorBoard, still needs work.	
@@ -478,14 +487,20 @@ def train_model(config):
             optimizer.step()
             optimizer.zero_grad() 										# Zero out the gradient.
 
-            run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, lambda msg: batch_iterator.write(msg), global_step, writer, loss_fn = loss_fn)
+            if config['edu']:
+                run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, lambda msg: batch_iterator.write(msg), global_step, writer, loss_fn = loss_fn)
 
             global_step += 1 											# Used by TensorBoard to keep track of the loss.
 
             if config['edu']:
                 break 												# Just show one run in 'edu' mode.
+        if not config['edu']:
+            epoch_valid_loss = run_validation(model, valid_dataloader, src_tokenizer, tgt_tokenizer, seq_len, device, lambda msg: batch_iterator.write(msg), global_step, writer, loss_fn = loss_fn)
+            epoch_valid_losses.append(epoch_valid_loss)
 
-        # Put run_validate here to run validation after every epoch - move model.train() accordingly.
+            np_batch_loss_values = np.asarray(batch_loss_values) # list to np array for losses list
+            epoch_train_loss = np_batch_loss_values.mean()
+            epoch_train_losses.append(epoch_train_loss)
 
         # Save the model after every epoch in case of a crash
         model_filename = get_model_file_path(config, f'{epoch:02d}') 
@@ -495,6 +510,10 @@ def train_model(config):
             'optimizer_state_dict': optimizer.state_dict(),							# Make sure to save optimizer as well.
             'global_step': global_step 
         }, model_filename)
+
+    if not config['edu']:
+        print(epoch_train_losses)
+        print(epoch_valid_losses)
 
 if __name__ == '__main__':
     warnings.filterwarnings('ignore')
