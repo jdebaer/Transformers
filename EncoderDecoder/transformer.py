@@ -266,11 +266,11 @@ class AttentionHead(nn.Module):
         self.config = config
 
         self.Wq = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
-        if self.type == 'self':
-            self.Wk = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
-            # Note: technically Wv can have an output_dim that is different from the output_dim of Wq and Wk.
-            #       Wq and Wk must have the same ouput_dim since we're doing dot product with the outputs.
-            self.Wv = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
+        # if self.type == 'self': # We need Wk and Wv for cross attention as well, as we need to reduce the size if we have multiple heads.
+        self.Wk = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
+        # Note: technically Wv can have an output_dim that is different from the output_dim of Wq and Wk.
+        #       Wq and Wk must have the same ouput_dim since we're doing dot product with the outputs.
+        self.Wv = nn.Linear(attn_head_input_dim, attn_head_output_dim, bias=False)
         self.dropout = nn.Dropout(config['dropout_prob'])
 
     def forward(self, embedding, mask, input_for_cross_attention=None, caller=None): 
@@ -290,8 +290,8 @@ class AttentionHead(nn.Module):
         else:
             head_context_vector = self.scaled_dot_product_attention(
                 self.Wq(embedding),							# For cross attention we use the query from the decoder.
-                input_for_cross_attention, 						# Used for cross attention key.
-                input_for_cross_attention, 						# User for cross attention value.
+                self.Wk(input_for_cross_attention), 						# Used for cross attention key.
+                self.Wv(input_for_cross_attention), 						# User for cross attention value.
                 self.dropout,
                 mask,
                 self.type,
@@ -302,12 +302,12 @@ class AttentionHead(nn.Module):
 
     def scaled_dot_product_attention(self, query, key, value, dropout: nn.Dropout, mask=None, type=None, caller=None):
 
-        # The q/k/v inputs are expected to be tensors with 3 dimensions: [batch_size, seq_len, embed_size].
-        # Example is [1, 5, 768] for sequences of length 5 with embeddings of size 768 -> 768 is reduced by W matrices as per the above.
-        # Transpose (-2,-1) puts the key in format [1, 768, 5] so that when we do Q * K the result is [1, 5, 5] as we multiply the "deepest" matrix.
+        # The q/k/v inputs are expected to be tensors with 3 dimensions: [batch_size, seq_len, embed_size//#heads].
+        # Example is [1, 5, 768//#heads] for sequences of length 5 with embeddings of size 768 -> 768 is reduced by W matrices as per the above.
+        # Transpose (-2,-1) puts the key in format [1, 768//#heads, 5] so that when we do Q * K the result is [1, 5, 5] as we multiply the "deepest" matrix.
         # This essentially is the "resonance" of each word with each other word, attention_scores, with dim (batch_size, seq_len, seq_len).
         # When then multiply each softmaxed attention weight with the corresponding value, [1, 5, 5] * [1, 5, <val size>] to go to [1, 5, <val size>] (returned).
-        # Note that in our implementation <val size> will be 5 as well, although technically is does not have to be.
+        # Note that in our implementation <val size> will be embed_size//#heads as well, although technically is does not have to be.
 
         # Note on how this behaves during validation, and with cross attention:
         # In this case the incoming query will be (batch_size, <number of predicted ids so far>, embed size). Let's do an example with [1, 2, 768] 
@@ -355,11 +355,11 @@ class AttentionHead(nn.Module):
             # Note to understand how the mask is used with the dot product (skipping the normalization here):
             # When we multiply query with key, we essentially measure the resonance of every word with every word in the sequence.
             # However, for the first word, we don't want to do that for any word that follows (and so on for 2nd, 3rd word ...).
-            #  Q     *   Kt
+            #  Q     *   Kt (Note: we're using rows here for the embeddings since it's easier to read, this is also how tensors are printed out.)
             # 
-            # 1,1,1    1,2,3   3, 6, 9    3 here is the resonance of the first word with itself, while 6 is the resonance of word 1 with word 2.
-            # 2,2,2  * 1,2,3 = 6,12,18    However, we want to mask out the 6 since we only want words to resonate with themselves or previous words.
-            # 3,3,3    1,2,3   9,18,27    Hence, we apply the mask, like this:
+            # [1,1,1]    1,2,3   3, 6, 9    3 here is the resonance of the first word with itself, while 6 is the resonance of word 1 with word 2.
+            # [2,2,2]  * 1,2,3 = 6,12,18    However, we want to mask out the 6 since we only want words to resonate with themselves or previous words.
+            # [3,3,3]    1,2,3   9,18,27    Hence, we apply the mask, like this:
             #
             # 3, 6, 9                1, 0, 0        3, -inf, -inf                            1,   0,  0 -> sums to 1
             # 6,12,18 -> masked_fill(1, 1, 0) gives 6,   12, -inf which softmax turns into .33, .66,  0 -> sums to 1
@@ -371,6 +371,19 @@ class AttentionHead(nn.Module):
             # 4,5,6 -> masked_fill([[[1,1,0]]]) -> 4,5,-inf
             # 7,8,9                                7,8,-inf
             #
+            # Additional note on dot product and value: the dot product measure how well each id in the key resonates with each id in the 
+            # query, for a particular kind of context that is "measured" by this particular head. 
+            # What we eventually want to return is the embedding for the query id, which is a vector, but with this vector "nudges" in different
+            # directions/dimensions so that it contains information from all the preceeding ids that resonate after going through Wq and Wk, which
+            # "prepare" the embeddings to resonate for the type of context that this head is incorporating.
+            #
+            # Note: changing seq_len to 4 here for easier readability:
+            # Weights are [seq_len, seq_len] x [ seq_len, <val_size>] -> [seq_len, <val_size>]  
+            #   1,   0,  0,  0   [1,1,1]       1   , 1   , 1         this now contains context from all previous ids, dimension by dimension
+            # .33, .66,  0,  0 * [2,2,2] gives 1.65, 1.65, 1.65      Example: in the first dim, 2.32 == .16*1 + .33*1.65 + .5*2.32 + 0*0 so
+            # .16, .33, .5   0   [3,3,3]       2.32, 2.32, 2.32 ---> our vector got nudged with this amount in this particular dimension related 
+            #   0    0   0   0   [4,4,4]       0     0     0         to the type of context we are capturing here. 
+            #                                                      
 
         # Note on the softmax: has to be applied over the products of 1 query with all the keys, not other way round.
         attention_weights = F.softmax(attention_scores, dim = -1)

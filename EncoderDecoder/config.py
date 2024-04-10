@@ -5,11 +5,11 @@ def get_config():
         'batch_size': 1,
         'num_epochs': 1,
         'lr': 10**-4,
-        'embed_size': 3,
+        'embed_size': 6,
         'ff_intermediate_size': 32,
         'num_encoderblocks': 1,
         'num_decoderblocks': 1,
-        'num_attention_heads': 1,
+        'num_attention_heads': 2,
         'src_language': 'en',
         'tgt_language': 'fr',
         'model_folder': 'weights',
@@ -18,7 +18,7 @@ def get_config():
         'tokenizer_file': 'tokenizer_{0}.json',
         'experiment_name': 'runs/tmodel',
         'dropout_prob': 0.1,
-        'edu': True
+        'edu': False
     }
 
 def get_model_file_path(config, epoch: str):
