@@ -123,7 +123,8 @@ class Decoder(nn.Module):
             context_vectorized_embeddings = decoder_block(context_vectorized_embeddings, decoder_mask, encoder_output, encoder_mask)
 
 	# Since we are doing pre-layer normalization, we need to do one final normalization after 
-        # all the EncoderBlocks have run, as we want to Encoder itself to output something normalized.
+        # all the DecoderBlocks have run, as we want to Decoder itself to output something normalized.
+        # Note: normalizing here does not hurt, but might not be necessary. The output is going to the projection layer which itself will do softmax.
         norm_context_vectorized_embeddings = self.layer_norm(context_vectorized_embeddings)
         return norm_context_vectorized_embeddings 
 
@@ -170,6 +171,8 @@ class Encoder(nn.Module):
 
 	# Since we are doing pre-layer normalization, we need to do one final normalization after 
         # all the EncoderBlocks have run, as we want to Encoder itself to output something normalized.
+        # Note: we're going to feed this output in as cross attention in the Decoder, for the key and value.
+        #       The "native" query will also be layer-normalized.
         norm_context_vectorized_embeddings = self.layer_norm(context_vectorized_embeddings)
         return norm_context_vectorized_embeddings 
 
