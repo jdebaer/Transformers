@@ -315,6 +315,12 @@ def get_dataloader(config):
     tgt_seq_len = 0
     seq_len = 0
 
+    # Note: below, we go over the complete dataset, convert to ids, and then use the longest sequence to set seq_len.
+    #       It's however not a requirement that seq_len is the same for ALL training samples.
+    #       The requirement is that seq_len is the same for all samples in a batch.
+    #       This means that transformers can handle input like [1, <number of ids>] where the number of ids can by anything, but is 
+    #       usually limited to a max, like 512 for BERT.
+
     for item in dataset_raw:
         #src_ids = src_tokenizer.encode(item['translation'][config['src_language']]).ids
         #tgt_ids = src_tokenizer.encode(item['translation'][config['tgt_language']]).ids
