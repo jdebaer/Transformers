@@ -1,0 +1,1 @@
+1. Padding ids -> set to -100 to that they are ignored by nn.CrossEntropy. We already mask them during training, but do this as well.
