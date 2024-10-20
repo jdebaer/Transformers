@@ -3,6 +3,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from math import sqrt
 
+# Note: at inference time, seq_len starts at (length) 1. We don't do padding because it's not needed. We also don't do causal masking. This will make the
+# "earlier" predictions in the sequence "cheat" - but we're not using those anyway, we only use the prediction made by the last token in the sequence.
+# Technically the max of the seq_len (context window) is only an issue for the (absolute) positional encoding and also to put a limit on computational
+# load.
+# At training time, because we batch, we need to padd the sequences until they reach a common length, which typically is the max seq_len == context windows.
+# We do causal masking there as well, with mask that is actually an array of masks, one mask for each of the predicted tokens which start at the second
+# token and go all the way to [EOS]. Remember that at training time we generate as many predicitons as there are tokens (for token 2 -> [EOS]) and we use
+# them all to train.
+
+
 ##########################
 ########## HEAD ##########
 
